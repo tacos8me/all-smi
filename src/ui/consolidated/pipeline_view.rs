@@ -179,6 +179,9 @@ impl PipelineView {
             Phase::Down("exporter unreachable".to_string())
         } else if split.is_none() && sup.is_none() {
             Phase::Unknown("no phase probe (api --json-probe)".to_string())
+        } else if !split.is_some_and(|s| s.up) && !sup.is_some_and(|s| s.up) {
+            // The exporter answers but the serving process does not.
+            Phase::Idle("not serving".to_string())
         } else if decoding {
             let per_step = match (
                 server.and_then(|s| s.value("total_completion_tokens")),
@@ -195,7 +198,7 @@ impl PipelineView {
             if matches!(front, Phase::Prefill { .. }) {
                 Phase::Waiting("for the prefill state".to_string())
             } else {
-                Phase::Busy("importing state".to_string())
+                Phase::Busy("request in flight".to_string())
             }
         } else {
             let avg = server
@@ -354,5 +357,14 @@ mod tests {
         let bare = PipelineView::build(&model, &status(None), &[]);
         assert!(matches!(bare.back, Phase::Unknown(_)));
         assert!(!bare.back.is_active());
+
+        // Probes configured, serving process gone.
+        let mut stopped = probes(0.0, 0.0, 300.0);
+        for p in &mut stopped[1].json {
+            p.up = false;
+            p.values.clear();
+        }
+        let v = PipelineView::build(&model, &status(None), &stopped);
+        assert_eq!(v.back, Phase::Idle("not serving".to_string()));
     }
 }

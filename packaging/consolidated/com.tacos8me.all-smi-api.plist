@@ -13,8 +13,9 @@
 
   Sudoless IOReport/SMC metrics at a 3 s cadence, listening only on the
   direct link and loopback, plus the link interface's byte counters and
-  the GPU lock holder (found with lsof; the lock is never taken). Paths
-  are absolute because launchd does not expand `~`.
+  the GPU lock holder (found with lsof; the lock is never taken), and
+  the Icculis phase probes. Paths are absolute because launchd does not
+  expand `~`.
 -->
 <plist version="1.0">
 <dict>
@@ -34,6 +35,16 @@
 		<string>en0</string>
 		<string>--watch-lock</string>
 		<string>/Users/ian/llm/locks/gpu.lock</string>
+		<!-- Icculis phase probes: the ds41 supervisor that llama-swap
+		     starts on port 10001, its /health (in-flight requests), and,
+		     proxied to the og worker, the split-pipeline step counters
+		     and the server's token counters. Read-only GETs. -->
+		<string>--json-probe</string>
+		<string>sup=http://127.0.0.1:10001/health</string>
+		<string>--json-probe</string>
+		<string>og=http://127.0.0.1:10001/og/stats</string>
+		<string>--json-probe</string>
+		<string>omlx=http://127.0.0.1:10001/api/status</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
