@@ -249,10 +249,13 @@ impl DataCollectionStrategy for RemoteCollector {
 
         // Update utilization history
         self.aggregator.update_utilization_history(&mut state);
-        if let Some(mut consolidated) = state.consolidated.take() {
-            consolidated.record_collection(&state.gpu_info, &state.host_probes);
-            state.consolidated = Some(consolidated);
-        }
+        let AppState {
+            device_series,
+            gpu_info,
+            host_probes,
+            ..
+        } = &mut *state;
+        device_series.record_collection(gpu_info, host_probes);
 
         // Feed power samples into the energy integrator (issue #191).
         // In remote mode this exercises the same code path as local

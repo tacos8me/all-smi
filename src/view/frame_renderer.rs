@@ -279,6 +279,7 @@ impl FrameRenderer {
                 tabs: &snapshot.tabs,
                 connection_status: &snapshot.connection_status,
                 host_probes: &snapshot.host_probes,
+                series: &snapshot.device_series,
                 state: consolidated,
                 now_unix: chrono::Utc::now().timestamp().max(0) as u64,
             };

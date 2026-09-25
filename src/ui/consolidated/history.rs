@@ -88,10 +88,48 @@ impl SeriesHistory {
     pub fn is_empty(&self) -> bool {
         self.series.is_empty()
     }
+
+    /// Append one sample per device and link series from a finished
+    /// collection cycle. Devices with no reading contribute nothing rather
+    /// than a zero, so a gap in the source never renders as an idle dip.
+    pub fn record_collection(&mut self, gpu_info: &[GpuInfo], host_probes: &[HostProbes]) {
+        let mut total_power = 0.0;
+        let mut util_sum = 0.0;
+        let mut util_count = 0usize;
+        for gpu in gpu_info {
+            if let Some(util) = gpu.utilization_reading() {
+                self.push(util_key(&gpu.uuid), util);
+                util_sum += util;
+                util_count += 1;
+            }
+            if let Some(watts) = gpu.power_consumption_reading() {
+                self.push(power_key(&gpu.uuid), watts);
+                total_power += watts;
+            }
+        }
+        if !gpu_info.is_empty() {
+            self.push(TOTAL_POWER_KEY.to_string(), total_power);
+        }
+        if util_count > 0 {
+            self.push(TOTAL_UTIL_KEY.to_string(), util_sum / util_count as f64);
+        }
+        for host in host_probes {
+            for iface in &host.interfaces {
+                if let Some(rx) = iface.rx_bytes_per_sec {
+                    self.push(net_rx_key(&host.host_id, &iface.interface), rx);
+                }
+                if let Some(tx) = iface.tx_bytes_per_sec {
+                    self.push(net_tx_key(&host.host_id, &iface.interface), tx);
+                }
+            }
+        }
+    }
 }
 
 /// Everything the Consolidated tab keeps between frames. `AppState` holds
-/// `Some` only when the tab was requested.
+/// `Some` only when the tab was requested. Device and link series live in
+/// `AppState::device_series`, which is recorded whether or not the tab
+/// exists; `history` here holds only the pipeline panel's series.
 #[derive(Clone, Debug, Default)]
 pub struct ConsolidatedState {
     pub history: SeriesHistory,
@@ -100,45 +138,6 @@ pub struct ConsolidatedState {
 }
 
 impl ConsolidatedState {
-    /// Append one sample per series from a finished collection cycle.
-    /// Devices with no reading contribute nothing rather than a zero, so a
-    /// gap in the source never renders as an idle dip.
-    pub fn record_collection(&mut self, gpu_info: &[GpuInfo], host_probes: &[HostProbes]) {
-        let mut total_power = 0.0;
-        let mut util_sum = 0.0;
-        let mut util_count = 0usize;
-        for gpu in gpu_info {
-            if let Some(util) = gpu.utilization_reading() {
-                self.history.push(util_key(&gpu.uuid), util);
-                util_sum += util;
-                util_count += 1;
-            }
-            if let Some(watts) = gpu.power_consumption_reading() {
-                self.history.push(power_key(&gpu.uuid), watts);
-                total_power += watts;
-            }
-        }
-        if !gpu_info.is_empty() {
-            self.history.push(TOTAL_POWER_KEY.to_string(), total_power);
-        }
-        if util_count > 0 {
-            self.history
-                .push(TOTAL_UTIL_KEY.to_string(), util_sum / util_count as f64);
-        }
-        for host in host_probes {
-            for iface in &host.interfaces {
-                if let Some(rx) = iface.rx_bytes_per_sec {
-                    self.history
-                        .push(net_rx_key(&host.host_id, &iface.interface), rx);
-                }
-                if let Some(tx) = iface.tx_bytes_per_sec {
-                    self.history
-                        .push(net_tx_key(&host.host_id, &iface.interface), tx);
-                }
-            }
-        }
-    }
-
     /// Store one engine `/health` poll. A failed poll replaces the last
     /// reading so a dead engine is never shown as healthy.
     pub fn record_engine(&mut self, result: Result<EngineHealth, String>) {
@@ -238,7 +237,7 @@ mod tests {
 
     #[test]
     fn record_collection_skips_missing_readings_and_sums_power() {
-        let mut state = ConsolidatedState::default();
+        let mut series = SeriesHistory::default();
         let mut idle = gpu("h1:9090", "gpu-a", "NVIDIA RTX", 0);
         idle.power_consumption = 90.0;
         idle.utilization = 10.0;
@@ -254,20 +253,12 @@ mod tests {
             }],
             ..Default::default()
         }];
-        state.record_collection(&[idle, unavailable], &probes);
-        assert_eq!(state.history.values(&power_key("gpu-a")), vec![90.0]);
-        assert!(state.history.values(&power_key("gpu-b")).is_empty());
-        assert_eq!(state.history.values(TOTAL_POWER_KEY), vec![90.0]);
-        assert_eq!(state.history.values(TOTAL_UTIL_KEY), vec![20.0]);
-        assert_eq!(
-            state.history.values(&net_rx_key("h2:9090", "en0")),
-            vec![5.0]
-        );
-        assert!(
-            state
-                .history
-                .values(&net_tx_key("h2:9090", "en0"))
-                .is_empty()
-        );
+        series.record_collection(&[idle, unavailable], &probes);
+        assert_eq!(series.values(&power_key("gpu-a")), vec![90.0]);
+        assert!(series.values(&power_key("gpu-b")).is_empty());
+        assert_eq!(series.values(TOTAL_POWER_KEY), vec![90.0]);
+        assert_eq!(series.values(TOTAL_UTIL_KEY), vec![20.0]);
+        assert_eq!(series.values(&net_rx_key("h2:9090", "en0")), vec![5.0]);
+        assert!(series.values(&net_tx_key("h2:9090", "en0")).is_empty());
     }
 }

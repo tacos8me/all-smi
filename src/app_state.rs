@@ -25,6 +25,7 @@ use crate::storage::info::StorageInfo;
 use crate::ui::aggregation::user::{UserAggregationResult, UserSortKey};
 use crate::ui::alerts::{AlertTransition, Alerter};
 use crate::ui::consolidated::ConsolidatedState;
+use crate::ui::consolidated::history::SeriesHistory;
 use crate::ui::filter_dsl::Expr as FilterExpr;
 use crate::ui::notification::NotificationManager;
 use crate::ui::topology::TopologyViewMode;
@@ -433,6 +434,10 @@ pub struct AppState {
     /// Consolidated-tab state (sparkline history). `Some` only when the
     /// viewer was started with `--consolidated`.
     pub consolidated: Option<ConsolidatedState>,
+    /// Per-device and per-link history (remote view mode), one sample per
+    /// collection cycle. Feeds the All tab's history charts and the
+    /// Consolidated tab's sparklines.
+    pub device_series: SeriesHistory,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -573,6 +578,7 @@ impl AppState {
             },
             host_probes: Vec::new(),
             consolidated: None,
+            device_series: SeriesHistory::default(),
         }
     }
 

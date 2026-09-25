@@ -36,6 +36,7 @@ use crate::storage::info::StorageInfo;
 use crate::ui::aggregation::user::UserAggregationResult;
 use crate::ui::alerts::{AlertTransition, Alerter};
 use crate::ui::consolidated::ConsolidatedState;
+use crate::ui::consolidated::history::SeriesHistory;
 use crate::ui::filter_dsl::Expr as FilterExpr;
 use crate::ui::notification::NotificationManager;
 use crate::ui::topology::TopologyViewMode;
@@ -187,6 +188,8 @@ pub struct RenderSnapshot {
     pub host_probes: Vec<HostProbes>,
     /// Sparkline history; `None` unless `--consolidated` was given.
     pub consolidated: Option<ConsolidatedState>,
+    /// Per-device and per-link history (remote view mode).
+    pub device_series: SeriesHistory,
 }
 
 impl RenderSnapshot {
@@ -303,6 +306,7 @@ impl RenderSnapshot {
             // Consolidated tab
             host_probes: state.host_probes.clone(),
             consolidated: state.consolidated.clone(),
+            device_series: state.device_series.clone(),
         }
     }
 
@@ -419,6 +423,7 @@ impl RenderSnapshot {
         // Consolidated tab
         state.host_probes = self.host_probes.clone();
         state.consolidated = self.consolidated.clone();
+        state.device_series = self.device_series.clone();
 
         state
     }

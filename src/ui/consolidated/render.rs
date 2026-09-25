@@ -56,6 +56,8 @@ pub struct ConsolidatedInputs<'a> {
     pub tabs: &'a [String],
     pub connection_status: &'a HashMap<String, ConnectionStatus>,
     pub host_probes: &'a [HostProbes],
+    /// Device, total and link series (`AppState::device_series`).
+    pub series: &'a SeriesHistory,
     pub state: &'a ConsolidatedState,
     /// Wall-clock seconds, for "held for" durations.
     pub now_unix: u64,
@@ -84,10 +86,10 @@ pub fn render_consolidated_tab<W: Write>(
     render_title(&mut w, &model);
     render_device_header(&mut w, &layout);
     for host in &model.hosts {
-        render_host(&mut w, &layout, host, &inputs.state.history);
+        render_host(&mut w, &layout, host, inputs.series);
     }
     w.rule();
-    render_totals(&mut w, &layout, &model, &inputs.state.history);
+    render_totals(&mut w, &layout, &model, inputs.series);
     render_probes(&mut w, &layout, &model, inputs);
 }
 
@@ -407,12 +409,10 @@ pub(crate) fn render_links<W: Write>(
                 .rcell(&fmt_rate(iface.tx_bytes_per_sec), 11, Color::Yellow);
             if spark > 0 {
                 let rx = inputs
-                    .state
-                    .history
+                    .series
                     .values(&history::net_rx_key(&host.host_id, &iface.interface));
                 let tx = inputs
-                    .state
-                    .history
+                    .series
                     .values(&history::net_tx_key(&host.host_id, &iface.interface));
                 // One shared ceiling so rx and tx read on the same scale.
                 let ceiling = rx.iter().chain(&tx).copied().fold(1_000_000.0, f64::max);
@@ -737,6 +737,16 @@ mod tests {
     }
 
     fn render(cols: u16, rows: u16, probes: &[HostProbes], state: &ConsolidatedState) -> String {
+        render_with(cols, rows, probes, state, &SeriesHistory::default())
+    }
+
+    fn render_with(
+        cols: u16,
+        rows: u16,
+        probes: &[HostProbes],
+        state: &ConsolidatedState,
+        series: &SeriesHistory,
+    ) -> String {
         let (gpus, tabs, statuses) = mac_and_box();
         let inputs = ConsolidatedInputs {
             gpu_info: &gpus,
@@ -744,6 +754,7 @@ mod tests {
             tabs: &tabs,
             connection_status: &statuses,
             host_probes: probes,
+            series,
             state,
             now_unix: 1_000_750,
         };
@@ -793,13 +804,14 @@ mod tests {
 
     #[test]
     fn lines_never_exceed_the_terminal_width() {
-        let mut state = ConsolidatedState::default();
+        let state = ConsolidatedState::default();
+        let mut series = SeriesHistory::default();
         let (gpus, _, _) = mac_and_box();
         for _ in 0..50 {
-            state.record_collection(&gpus, &probes());
+            series.record_collection(&gpus, &probes());
         }
         for cols in [80u16, 100, 120, 160, 220] {
-            let out = render(cols, 60, &probes(), &state);
+            let out = render_with(cols, 60, &probes(), &state, &series);
             for line in out.split("\r\n") {
                 assert!(
                     display_width(line) <= cols as usize,
@@ -847,6 +859,7 @@ mod tests {
             tabs: &tabs,
             connection_status: &statuses,
             host_probes: &[],
+            series: &SeriesHistory::default(),
             state: &state,
             now_unix: 0,
         };
