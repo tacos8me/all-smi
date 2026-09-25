@@ -245,9 +245,29 @@ fn center(text: &str, width: usize) -> String {
 
 /// One line: `RTX box ● PREFILL 8s ━▶ 1.1 GB/s ━▶ M5 Ultra ○ waiting …`.
 fn strip(p: &PipelineStatus, view: &PipelineView, cols: usize) -> Vec<Line> {
+    // Roles go first when space runs out; a detail that still does not
+    // fit is clipped at the edge.
+    let line = strip_line(p, view, true);
+    if line.width() <= cols {
+        return vec![line];
+    }
+    let line = strip_line(p, view, false);
+    if cols >= 80 {
+        return vec![line];
+    }
+    // Very narrow: the phase words only.
+    let mut short = Line::default();
+    short.text(" ", RULE);
+    half_word(&mut short, &p.config.front.name, None, &view.front);
+    short.text(" ▶ ", MUTED);
+    half_word(&mut short, &p.config.back.name, None, &view.back);
+    vec![short]
+}
+
+fn strip_line(p: &PipelineStatus, view: &PipelineView, roles: bool) -> Line {
     let mut line = Line::default();
     line.text(" ", RULE);
-    half(&mut line, &p.config.front, &view.front);
+    half(&mut line, &p.config.front, roles, &view.front);
     let rate = match (view.link.clone(), view.to_back, view.to_front) {
         (LinkUse::PrefillState, r, _) => r,
         (_, Some(a), Some(b)) => Some(a.max(b)),
@@ -264,21 +284,17 @@ fn strip(p: &PipelineStatus, view: &PipelineView, cols: usize) -> Vec<Line> {
             if active { ACCENT } else { MUTED },
         )
         .text("   ", RULE);
-    half(&mut line, &p.config.back, &view.back);
-    if line.width() > cols {
-        // Drop the roles and details, keep the phase words.
-        let mut short = Line::default();
-        short.text(" ", RULE);
-        half_word(&mut short, &p.config.front.name, None, &view.front);
-        short.text(" ▶ ", MUTED);
-        half_word(&mut short, &p.config.back.name, None, &view.back);
-        return vec![short];
-    }
-    vec![line]
+    half(&mut line, &p.config.back, roles, &view.back);
+    line
 }
 
-fn half(line: &mut Line, stage: &Stage, phase: &Phase) {
-    half_word(line, &stage.name, Some(&stage.short), phase);
+fn half(line: &mut Line, stage: &Stage, role: bool, phase: &Phase) {
+    half_word(
+        line,
+        &stage.name,
+        role.then_some(stage.short.as_str()),
+        phase,
+    );
     let (_, detail) = phase.words();
     if !detail.is_empty() {
         line.text("  ", MUTED).text(&detail, SUBTLE);

@@ -36,6 +36,12 @@ use super::pipeline::{PipelineStatus, Probe};
 
 /// Step rate (per second) below which the back host counts as idle.
 const DECODE_MIN_STEPS: f64 = 0.2;
+/// GPU utilization (%) above which a back host that is not serving is
+/// shown as busy with other work.
+const BUSY_GPU_UTIL: f64 = 20.0;
+/// Link traffic (bytes/s) that, with a session open, means steps are
+/// flowing between polls.
+const LINK_BUSY: f64 = 1e6;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -147,6 +153,13 @@ impl PipelineView {
                 .unwrap_or(0.0)
                 > 0.0;
 
+        let to_back = link_rate(front_probes, true).or_else(|| link_rate(back_probes, false));
+        let to_front = link_rate(back_probes, true).or_else(|| link_rate(front_probes, false));
+        let link_busy = [to_back, to_front]
+            .into_iter()
+            .flatten()
+            .any(|r| r >= LINK_BUSY);
+
         let front = match &p.engine {
             Probe::Pending => Phase::Unknown("waiting for /health".to_string()),
             Probe::Err(e) => Phase::Down(e.clone()),
@@ -157,8 +170,14 @@ impl PipelineView {
             },
             Probe::Ok(_) if decoding => Phase::Decode(format!("verify {rows:.0} rows/s")),
             Probe::Ok(h) => match h.gpu_job_label() {
-                Some(job) if job != "step" => Phase::Busy(job),
-                _ => {
+                Some(job) if job == "step" => Phase::Decode("verify step".to_string()),
+                Some(job) => Phase::Busy(job),
+                // Steps last milliseconds and fall between polls; an open
+                // session with traffic on the link is decoding.
+                None if h.sessions.unwrap_or(0) > 0 && link_busy => {
+                    Phase::Decode("steps on the link".to_string())
+                }
+                None => {
                     let sessions = h.sessions.unwrap_or(0);
                     let detail = if sessions > 0 {
                         format!(
@@ -180,8 +199,28 @@ impl PipelineView {
         } else if split.is_none() && sup.is_none() {
             Phase::Unknown("no phase probe (api --json-probe)".to_string())
         } else if !split.is_some_and(|s| s.up) && !sup.is_some_and(|s| s.up) {
-            // The exporter answers but the serving process does not.
-            Phase::Idle("not serving".to_string())
+            // The exporter answers but the serving process does not. The
+            // GPU may still be busy with work outside the serving stack
+            // (a benchmark holding the lock): say so rather than "idle".
+            let gpu = back_id
+                .as_deref()
+                .and_then(|h| model.hosts.iter().find(|s| s.host_id == h))
+                .and_then(|s| {
+                    s.devices
+                        .iter()
+                        .filter_map(|d| d.utilization)
+                        .reduce(f64::max)
+                });
+            let holder = back_probes
+                .and_then(|b| b.locks.iter().find_map(|l| l.holders.first()))
+                .map(|h| format!(" · lock: {} (pid {})", h.command, h.pid))
+                .unwrap_or_default();
+            match gpu {
+                Some(u) if u >= BUSY_GPU_UTIL => {
+                    Phase::Busy(format!("not serving · GPU {u:.0}%{holder}"))
+                }
+                _ => Phase::Idle(format!("not serving{holder}")),
+            }
         } else if decoding {
             let per_step = match (
                 server.and_then(|s| s.value("total_completion_tokens")),
@@ -207,19 +246,6 @@ impl PipelineView {
             Phase::Idle(avg.map_or(String::new(), |v| format!("avg {v:.0} tok/s")))
         };
 
-        let rate = |probes: Option<&HostProbes>, tx: bool| {
-            probes.and_then(|h| {
-                h.interfaces.first().and_then(|i| {
-                    if tx {
-                        i.tx_bytes_per_sec
-                    } else {
-                        i.rx_bytes_per_sec
-                    }
-                })
-            })
-        };
-        let to_back = rate(front_probes, true).or_else(|| rate(back_probes, false));
-        let to_front = rate(back_probes, true).or_else(|| rate(front_probes, false));
         let link = match (&front, &back) {
             (Phase::Prefill { .. }, _) => LinkUse::PrefillState,
             (_, Phase::Decode(_)) | (Phase::Decode(_), _) => LinkUse::Steps,
@@ -235,6 +261,16 @@ impl PipelineView {
             to_front,
             link,
         }
+    }
+}
+
+/// Transmit (or receive) rate of a host's first probed interface.
+fn link_rate(probes: Option<&HostProbes>, tx: bool) -> Option<f64> {
+    let iface = probes?.interfaces.first()?;
+    if tx {
+        iface.tx_bytes_per_sec
+    } else {
+        iface.rx_bytes_per_sec
     }
 }
 
@@ -344,6 +380,12 @@ mod tests {
         assert_eq!(v.front, Phase::Decode("verify 90 rows/s".to_string()));
         assert_eq!(v.link, LinkUse::Steps);
         assert!(v.front.is_active() && v.back.is_active());
+
+        // No step caught by the poll, but a session with a busy link.
+        let mut p = PipelineStatus::new(PipelineConfig::icculis(None, None));
+        p.engine = Probe::Ok(EngineHealth::parse(br#"{"gpu_job": null, "sessions": 1}"#).unwrap());
+        let v = PipelineView::build(&model, &p, &probes(0.0, 0.0, 5e6));
+        assert_eq!(v.front, Phase::Decode("steps on the link".to_string()));
     }
 
     #[test]
@@ -366,5 +408,26 @@ mod tests {
         }
         let v = PipelineView::build(&model, &status(None), &stopped);
         assert_eq!(v.back, Phase::Idle("not serving".to_string()));
+
+        // Not serving, but the Mac GPU is busy under someone else's lock.
+        let (mut gpus, tabs, statuses) = mac_and_box();
+        for g in &mut gpus {
+            g.utilization = 85.0;
+        }
+        let model = model_of(&gpus, &[], &tabs, &statuses);
+        stopped[1].locks = vec![crate::probes::lock::LockSample {
+            path: "/l".to_string(),
+            holders: vec![crate::probes::lock::LockHolder {
+                pid: 7,
+                command: "python".to_string(),
+            }],
+            since_unix: None,
+        }];
+        let v = PipelineView::build(&model, &status(Some("step")), &stopped);
+        assert_eq!(
+            v.back,
+            Phase::Busy("not serving · GPU 85% · lock: python (pid 7)".to_string())
+        );
+        assert_eq!(v.front, Phase::Decode("verify step".to_string()));
     }
 }
