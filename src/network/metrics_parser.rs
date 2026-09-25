@@ -857,6 +857,15 @@ impl MetricsParser {
                     value as u32
                 );
             }
+            "cpu_gpu_core_count" => {
+                self.ensure_apple_silicon_info(cpu_info);
+                crate::update_optional_field!(
+                    cpu_info,
+                    apple_silicon_info,
+                    gpu_core_count,
+                    value as u32
+                );
+            }
             "cpu_s_core_utilization" => {
                 self.ensure_apple_silicon_info(cpu_info);
                 crate::update_optional_field!(
@@ -2196,6 +2205,7 @@ all_smi_cpu_p_core_count{cpu_model="Apple M2 Max", instance="node-0058", hostnam
 all_smi_cpu_e_core_count{cpu_model="Apple M2 Max", instance="node-0058", hostname="node-0058", index="0"} 4
 all_smi_cpu_p_core_utilization{cpu_model="Apple M2 Max", instance="node-0058", hostname="node-0058", index="0"} 25.2
 all_smi_cpu_e_core_utilization{cpu_model="Apple M2 Max", instance="node-0058", hostname="node-0058", index="0"} 10.8
+all_smi_cpu_gpu_core_count{cpu_model="Apple M2 Max", instance="node-0058", hostname="node-0058", index="0"} 38
 "#;
 
         let parsed = parser.parse_metrics(test_data, host, &re);
@@ -2214,6 +2224,7 @@ all_smi_cpu_e_core_utilization{cpu_model="Apple M2 Max", instance="node-0058", h
         assert_eq!(apple_info.e_core_count, 4);
         assert_eq!(apple_info.p_core_utilization, 25.2);
         assert_eq!(apple_info.e_core_utilization, 10.8);
+        assert_eq!(apple_info.gpu_core_count, 38);
     }
 
     #[test]
