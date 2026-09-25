@@ -33,33 +33,15 @@ impl LayoutCalculator {
     /// area (process list, GPU rows) from being unnecessarily clipped and
     /// preserves the "reserved space for function keys" regression fix.
     pub fn calculate_header_lines(state: &AppState, cols: u16) -> u16 {
-        let mut lines = 0u16;
-
-        // Basic header (title line)
-        lines += 1;
-
         if state.is_local_mode {
-            // Local mode shows an identity row plus responsive metrics. The
+            // Title line, then an identity row plus responsive metrics. The
             // metrics intentionally occupy two rows below 40 columns rather
             // than relying on terminal auto-wrap.
-            lines += crate::ui::local_header::local_header_line_count(cols);
+            1 + crate::ui::local_header::local_header_line_count(cols)
         } else {
-            // "Cluster Overview" label line
-            lines += 1;
-
-            // System overview dashboard card (2 rows) + label separator row
-            lines += 4;
-
-            // Live statistics section (remote sparkline panel)
-            if !state.utilization_history.is_empty() || !state.cpu_utilization_history.is_empty() {
-                lines += 6; // Separator + header + 3 sparkline rows + spacer
-            }
-
-            // Tabs section
-            lines += 2; // Tabs line + separator
+            // Title, cluster overview blocks, tab strip and its rule.
+            crate::ui::cluster::remote_header_rows(state, cols)
         }
-
-        lines
     }
 
     /// Calculate available content area
@@ -424,27 +406,21 @@ mod tests {
         };
         let local_lines = LayoutCalculator::calculate_header_lines(&local_state, 120);
 
-        // Remote mode without history: title + "Cluster Overview" label +
-        // dashboard card rows + tabs row.
-        let mut remote_state = AppState {
+        // Remote mode: title, overview blocks and the tab strip, and the
+        // same count the header renderer reports.
+        let remote_state = AppState {
             is_local_mode: false,
             ..AppState::default()
         };
-        let remote_lines_no_history = LayoutCalculator::calculate_header_lines(&remote_state, 120);
+        let remote_lines = LayoutCalculator::calculate_header_lines(&remote_state, 120);
 
         assert!(
-            local_lines < remote_lines_no_history,
-            "local mode ({local_lines}) should use fewer header lines than remote mode ({remote_lines_no_history})"
+            local_lines < remote_lines,
+            "local mode ({local_lines}) should use fewer header lines than remote mode ({remote_lines})"
         );
-
-        // Remote mode with non-empty utilization history adds more lines.
-        remote_state.utilization_history.push_back(42.0);
-        let remote_lines_with_history =
-            LayoutCalculator::calculate_header_lines(&remote_state, 120);
-
-        assert!(
-            remote_lines_no_history < remote_lines_with_history,
-            "remote mode with history ({remote_lines_with_history}) should use more header lines than without ({remote_lines_no_history})"
+        assert_eq!(
+            remote_lines,
+            crate::ui::cluster::remote_header_rows(&remote_state, 120)
         );
     }
 

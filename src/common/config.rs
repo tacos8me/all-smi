@@ -380,6 +380,8 @@ impl ThemeConfig {
         }
     }
 
+    // The cluster views color by `ui::theme`; kept for the library API.
+    #[allow(dead_code)]
     pub fn utilization_color(utilization: f64) -> crossterm::style::Color {
         use crossterm::style::Color;
 

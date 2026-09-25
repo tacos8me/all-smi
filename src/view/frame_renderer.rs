@@ -19,7 +19,7 @@
 //! This means the `AppState` mutex is not held during any of this work.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
 use chrono::Local;
@@ -33,7 +33,7 @@ use crate::cli::ViewArgs;
 use crate::device::ProcessInfo;
 use crate::ui::activity_panel;
 use crate::ui::buffer::BufferWriter;
-use crate::ui::dashboard::{draw_dashboard_items, draw_system_view};
+use crate::ui::cluster;
 use crate::ui::gpu_sparkline_panel;
 use crate::ui::layout::LayoutCalculator;
 use crate::ui::local_details::{
@@ -174,29 +174,33 @@ impl FrameRenderer {
             " ".to_string()
         };
 
-        // Print header with runtime environment shield
-        print_colored_text(&mut buffer, &header_text, Color::White, None, None);
+        let is_remote = args.hosts.is_some() || args.hostfile.is_some();
 
-        if let Some((shield_content, shield_color, _)) = runtime_shield {
-            print_colored_text(&mut buffer, " ", Color::White, None, None);
+        // Remote mode draws its own title line as part of the cluster
+        // header (see below).
+        if view_state.is_local_mode {
+            // Print header with runtime environment shield
+            print_colored_text(&mut buffer, &header_text, Color::White, None, None);
+
+            if let Some((shield_content, shield_color, _)) = runtime_shield {
+                print_colored_text(&mut buffer, " ", Color::White, None, None);
+                print_colored_text(
+                    &mut buffer,
+                    &shield_content,
+                    Color::Black,
+                    Some(shield_color),
+                    None,
+                );
+            }
+
             print_colored_text(
                 &mut buffer,
-                &shield_content,
-                Color::Black,
-                Some(shield_color),
+                &format!("{spacing}{version_text}\r\n"),
+                Color::White,
+                None,
                 None,
             );
         }
-
-        print_colored_text(
-            &mut buffer,
-            &format!("{spacing}{version_text}\r\n"),
-            Color::White,
-            None,
-            None,
-        );
-
-        let is_remote = args.hosts.is_some() || args.hostfile.is_some();
 
         // Cluster Overview, dashboard items, and the tabs row are only meaningful
         // when monitoring multiple remote hosts. `is_local_mode` is false the moment
@@ -219,12 +223,50 @@ impl FrameRenderer {
                 );
             }
         } else {
-            // Write remaining header content to buffer
-            print_colored_text(&mut buffer, "Cluster Overview\r\n", Color::Cyan, None, None);
-            draw_system_view(&mut buffer, &view_state, cols);
-
-            draw_dashboard_items(&mut buffer, &view_state, cols);
+            // Title line and cluster overview, then the tab strip.
+            let model = cluster::model_for(&view_state);
+            let title = cluster::header::TitleInfo {
+                time: &current_time,
+                version,
+                runtime: snapshot
+                    .runtime_environment
+                    .display_info()
+                    .map(|(name, _)| name),
+            };
+            cluster::header::render_header(&mut buffer, &model, &title, cols);
             draw_tabs(&mut buffer, &view_state, cols);
+
+            // The All tab owns the rest of the frame: devices grouped by
+            // host, the Icculis strip, and the history panel.
+            if snapshot.current_tab == 0 {
+                let heading_rows = buffer.line_count() as u16;
+                let avail = rows.saturating_sub(heading_rows).saturating_sub(1).max(1);
+                let filtered_out: HashSet<String> = snapshot
+                    .gpu_info
+                    .iter()
+                    .filter(|g| !crate::ui::filter_dsl::apply(snapshot.filter_query.as_ref(), *g))
+                    .map(|g| g.uuid.clone())
+                    .collect();
+                let inputs = cluster::AllTabInputs {
+                    model: &model,
+                    series: &snapshot.device_series,
+                    host_probes: &snapshot.host_probes,
+                    pipeline: snapshot
+                        .consolidated
+                        .as_ref()
+                        .and_then(|c| c.pipeline.as_ref()),
+                    show_details: snapshot.show_details,
+                    sort: snapshot.sort_criteria,
+                    scroll: snapshot.gpu_scroll_offset,
+                    filtered_out: &filtered_out,
+                    hide_filtered: snapshot.filter_hide_nonmatching,
+                    interval_secs: history_interval(snapshot, args),
+                    now_unix: chrono::Utc::now().timestamp().max(0) as u64,
+                };
+                cluster::render_all_tab(&mut buffer, &inputs, cols, avail);
+                print_function_keys(&mut buffer, cols, rows, &view_state, is_remote);
+                return (buffer.get_buffer().to_string(), 0);
+            }
         }
 
         // Users tab (issue #189) owns its own section and skips the
@@ -276,12 +318,14 @@ impl FrameRenderer {
             let inputs = crate::ui::consolidated::ConsolidatedInputs {
                 gpu_info: &snapshot.gpu_info,
                 cpu_info: &snapshot.cpu_info,
+                memory_info: &snapshot.memory_info,
                 tabs: &snapshot.tabs,
                 connection_status: &snapshot.connection_status,
                 host_probes: &snapshot.host_probes,
                 series: &snapshot.device_series,
                 state: consolidated,
                 now_unix: chrono::Utc::now().timestamp().max(0) as u64,
+                interval_secs: history_interval(snapshot, args),
             };
             crate::ui::consolidated::render_consolidated_tab(&mut buffer, &inputs, cols, avail);
             print_function_keys(&mut buffer, cols, rows, &view_state, is_remote);
@@ -883,6 +927,16 @@ fn is_users_tab_selected(snapshot: &RenderSnapshot) -> bool {
         .get(snapshot.current_tab)
         .map(|t| t == crate::ui::tabs::USERS_TAB_NAME)
         .unwrap_or(false)
+}
+
+/// Seconds between collections, to label how much time the history
+/// charts span.
+fn history_interval(snapshot: &RenderSnapshot, args: &ViewArgs) -> u64 {
+    args.interval.unwrap_or_else(|| {
+        crate::common::config::EnvConfig::adaptive_interval(crate::ui::tabs::host_tab_count(
+            &snapshot.tabs,
+        ))
+    })
 }
 
 /// True when the snapshot's current tab is the Consolidated tab.

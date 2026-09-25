@@ -205,6 +205,13 @@ pub async fn handle_key_event(key_event: KeyEvent, state: &mut AppState, args: &
             state.show_help = !state.show_help;
             false
         }
+        KeyCode::Char('x') => {
+            // Per-device details on the All tab (thermal thresholds,
+            // P-state, driver and firmware); hidden by default.
+            state.show_details = !state.show_details;
+            state.mark_data_changed();
+            false
+        }
         KeyCode::Left => {
             if !state.show_help {
                 handle_left_arrow(state);

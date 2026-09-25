@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Pure view model for the Consolidated tab.
+//! Pure view model shared by the All and Consolidated tabs.
 //!
 //! Groups the scraped devices by host in tab-strip order, labels each
 //! device's memory as unified (Apple Silicon) or dedicated VRAM, and sums
-//! memory and power across every host. Hosts that stopped answering keep
-//! a row so an outage is visible instead of silently shrinking the table.
+//! memory and power across every host, counting a unified-memory host's
+//! RAM once (as the GPU's pool) rather than again as host RAM. Hosts that
+//! stopped answering keep a row so an outage is visible instead of
+//! silently shrinking the table.
 
 use std::collections::HashMap;
 
 use crate::app_state::ConnectionStatus;
-use crate::device::{CpuInfo, GpuInfo};
+use crate::device::{CpuInfo, GpuInfo, MemoryInfo};
+use crate::probes::HostProbes;
 
 /// Where a device's memory lives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,6 +48,9 @@ impl MemoryKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceRow {
     pub uuid: String,
+    /// Vendor and model, without edition suffixes ("NVIDIA RTX PRO 6000
+    /// Blackwell", "Apple M5 Ultra"), with ` #<index>` when a host has
+    /// several identical boards.
     pub name: String,
     pub memory_kind: MemoryKind,
     pub utilization: Option<f64>,
@@ -53,10 +59,52 @@ pub struct DeviceRow {
     pub power_watts: Option<f64>,
     pub power_limit_watts: Option<f64>,
     pub temperature_c: Option<u32>,
+    /// Slowdown threshold, when the device reports one.
+    pub slowdown_c: Option<u32>,
     pub frequency_mhz: Option<u32>,
     /// Apple Neural Engine power, when the device reports one.
     pub ane_watts: Option<f64>,
     pub core_count: Option<u32>,
+    /// Static and slow-moving facts for the details view (`x`): thermal
+    /// thresholds, P-state, driver, firmware, link.
+    pub details: Vec<String>,
+}
+
+impl DeviceRow {
+    /// Name plus the GPU core count for SoC GPUs:
+    /// "Apple M5 Ultra · 80-core GPU".
+    pub fn label(&self) -> String {
+        match self.core_count {
+            Some(n) if self.memory_kind == MemoryKind::Unified => {
+                format!("{} · {n}-core GPU", self.name)
+            }
+            _ => self.name.clone(),
+        }
+    }
+
+    pub fn memory_ratio(&self) -> f64 {
+        if self.total_memory > 0 {
+            self.used_memory as f64 / self.total_memory as f64
+        } else {
+            0.0
+        }
+    }
+
+    pub fn power_ratio(&self) -> Option<f64> {
+        match (self.power_watts, self.power_limit_watts) {
+            (Some(p), Some(l)) if l > 0.0 => Some(p / l),
+            _ => None,
+        }
+    }
+}
+
+/// Host CPU summary for the host header.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostCpu {
+    /// "Apple M5 Ultra", "AMD EPYC 9275F".
+    pub model: String,
+    pub cores: u32,
+    pub utilization: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,11 +116,26 @@ pub struct HostSection {
     pub devices: Vec<DeviceRow>,
     /// Package CPU power, reported by Apple Silicon hosts.
     pub cpu_power_watts: Option<f64>,
+    /// "macOS", "Linux", from the exporter's build info.
+    pub os: Option<String>,
+    pub cpu: Option<HostCpu>,
+    pub ram_used: u64,
+    pub ram_total: u64,
+}
+
+impl HostSection {
+    /// The host's RAM is the GPU's unified memory pool.
+    pub fn has_unified_memory(&self) -> bool {
+        self.devices
+            .iter()
+            .any(|d| d.memory_kind == MemoryKind::Unified)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Totals {
     pub devices: usize,
+    pub unified_devices: usize,
     pub hosts_up: usize,
     pub hosts_total: usize,
     pub avg_utilization: Option<f64>,
@@ -80,10 +143,15 @@ pub struct Totals {
     pub unified_total: u64,
     pub dedicated_used: u64,
     pub dedicated_total: u64,
+    /// RAM of hosts whose memory is not already counted as a unified pool.
+    pub host_ram_used: u64,
+    pub host_ram_total: u64,
     pub unified_power_watts: f64,
     pub dedicated_power_watts: f64,
     /// Sum of the board power limits the devices report (0 when none do).
     pub power_limit_watts: f64,
+    /// Hottest device reading and that device's slowdown threshold.
+    pub max_temperature: Option<(u32, Option<u32>)>,
 }
 
 impl Totals {
@@ -100,6 +168,17 @@ impl Totals {
     }
 }
 
+/// Everything the model is built from.
+pub struct ModelSources<'a> {
+    pub gpu_info: &'a [GpuInfo],
+    pub cpu_info: &'a [CpuInfo],
+    pub memory_info: &'a [MemoryInfo],
+    pub host_probes: &'a [HostProbes],
+    /// Tab strip, for host order; reserved tabs are skipped.
+    pub host_order: &'a [String],
+    pub connection_status: &'a HashMap<String, ConnectionStatus>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConsolidatedModel {
     pub hosts: Vec<HostSection>,
@@ -107,20 +186,16 @@ pub struct ConsolidatedModel {
 }
 
 impl ConsolidatedModel {
-    /// Build the model. `host_order` is the tab strip; reserved tabs are
-    /// skipped, and hosts that only appear in `gpu_info` are appended.
-    pub fn build(
-        gpu_info: &[GpuInfo],
-        cpu_info: &[CpuInfo],
-        host_order: &[String],
-        connection_status: &HashMap<String, ConnectionStatus>,
-    ) -> Self {
-        let mut order: Vec<String> = host_order
+    /// Build the model. Hosts follow the tab strip; hosts that only appear
+    /// in `gpu_info` are appended.
+    pub fn build(src: &ModelSources<'_>) -> Self {
+        let mut order: Vec<String> = src
+            .host_order
             .iter()
             .filter(|t| !crate::ui::tabs::is_reserved_tab(t))
             .cloned()
             .collect();
-        for gpu in gpu_info {
+        for gpu in src.gpu_info {
             if !order.contains(&gpu.host_id) {
                 order.push(gpu.host_id.clone());
             }
@@ -135,9 +210,12 @@ impl ConsolidatedModel {
         let mut util_count = 0usize;
 
         for host_id in order {
-            let status = connection_status.get(&host_id);
-            let mut gpus: Vec<&GpuInfo> =
-                gpu_info.iter().filter(|g| g.host_id == host_id).collect();
+            let status = src.connection_status.get(&host_id);
+            let mut gpus: Vec<&GpuInfo> = src
+                .gpu_info
+                .iter()
+                .filter(|g| g.host_id == host_id)
+                .collect();
             gpus.sort_by_key(|g| (device_index(g), g.uuid.clone()));
             let connected = status.map(|s| s.is_connected).unwrap_or(!gpus.is_empty());
             if connected {
@@ -150,13 +228,13 @@ impl ConsolidatedModel {
                 .map(|l| short_host_label(&l))
                 .unwrap_or_else(|| host_id.clone());
 
-            let host_cpu = cpu_info.iter().find(|c| c.host_id == host_id);
+            let host_cpu = src.cpu_info.iter().find(|c| c.host_id == host_id);
             // Remote Apple GPUs carry their core count on the CPU series.
             let soc_gpu_cores = host_cpu
                 .and_then(|c| c.apple_silicon_info.as_ref())
                 .map(|a| a.gpu_core_count)
                 .filter(|n| *n > 0);
-            let names: Vec<String> = gpus.iter().map(|g| short_device_name(&g.name)).collect();
+            let names: Vec<String> = gpus.iter().map(|g| device_name(g)).collect();
             let devices: Vec<DeviceRow> = gpus
                 .iter()
                 .zip(&names)
@@ -176,10 +254,16 @@ impl ConsolidatedModel {
                     util_sum += u;
                     util_count += 1;
                 }
+                if let Some(t) = d.temperature_c
+                    && totals.max_temperature.is_none_or(|(max, _)| t > max)
+                {
+                    totals.max_temperature = Some((t, d.slowdown_c));
+                }
                 let power = d.power_watts.unwrap_or(0.0);
                 totals.power_limit_watts += d.power_limit_watts.unwrap_or(0.0);
                 match d.memory_kind {
                     MemoryKind::Unified => {
+                        totals.unified_devices += 1;
                         totals.unified_used += d.used_memory;
                         totals.unified_total += d.total_memory;
                         totals.unified_power_watts += power;
@@ -192,9 +276,25 @@ impl ConsolidatedModel {
                 }
             }
 
+            let unified = devices.iter().any(|d| d.memory_kind == MemoryKind::Unified);
             let cpu_power_watts = host_cpu
                 .and_then(|c| c.power_consumption)
-                .filter(|_| devices.iter().any(|d| d.memory_kind == MemoryKind::Unified));
+                .filter(|_| unified);
+            let (ram_used, ram_total) = src
+                .memory_info
+                .iter()
+                .filter(|m| m.host_id == host_id)
+                .fold((0, 0), |(u, t), m| (u + m.used_bytes, t + m.total_bytes));
+            if !unified {
+                totals.host_ram_used += ram_used;
+                totals.host_ram_total += ram_total;
+            }
+            let os = src
+                .host_probes
+                .iter()
+                .find(|p| p.host_id == host_id)
+                .and_then(|p| p.os.as_deref())
+                .map(os_label);
 
             hosts.push(HostSection {
                 host_id,
@@ -203,6 +303,19 @@ impl ConsolidatedModel {
                 last_error: status.and_then(|s| s.last_error.clone()),
                 devices,
                 cpu_power_watts,
+                os,
+                cpu: host_cpu.map(|c| HostCpu {
+                    model: cpu_model_label(&c.cpu_model),
+                    cores: c
+                        .apple_silicon_info
+                        .as_ref()
+                        .map(|a| a.s_core_count + a.p_core_count + a.e_core_count)
+                        .filter(|n| *n > 0)
+                        .unwrap_or(c.total_cores),
+                    utilization: c.utilization,
+                }),
+                ram_used,
+                ram_total,
             });
         }
 
@@ -263,6 +376,7 @@ fn device_row(gpu: &GpuInfo, name: &str, duplicate: bool) -> DeviceRow {
             .and_then(|p| p.parse::<f64>().ok())
             .filter(|p| *p > 0.0),
         temperature_c: gpu.temperature_reading(),
+        slowdown_c: gpu.temperature_threshold_slowdown.filter(|t| *t > 0),
         frequency_mhz: gpu.frequency_reading(),
         // Apple readers carry ANE power in milliwatts in this field (the
         // exporter divides by 1000 for `all_smi_ane_power_watts`).
@@ -271,29 +385,114 @@ fn device_row(gpu: &GpuInfo, name: &str, duplicate: bool) -> DeviceRow {
             .flatten()
             .map(|mw| mw / 1000.0),
         core_count: gpu.gpu_core_count,
+        details: device_details(gpu),
     }
 }
 
-/// Drop vendor prefixes and edition suffixes that repeat on every row:
-/// "NVIDIA RTX PRO 6000 Blackwell Workstation Edition" becomes
-/// "RTX PRO 6000 Blackwell", "Apple M5 Ultra GPU" becomes "M5 Ultra GPU".
-pub fn short_device_name(name: &str) -> String {
-    let mut s = name.trim();
-    for prefix in ["NVIDIA ", "Apple "] {
-        if let Some(rest) = s.strip_prefix(prefix) {
-            s = rest;
+/// The facts the old per-GPU rows printed on every refresh, collected for
+/// the details view instead.
+fn device_details(gpu: &GpuInfo) -> Vec<String> {
+    let mut out = Vec::new();
+    let thresholds = [
+        ("slowdown", gpu.temperature_threshold_slowdown),
+        ("shutdown", gpu.temperature_threshold_shutdown),
+        ("max op", gpu.temperature_threshold_max_operating),
+    ];
+    for (label, value) in thresholds {
+        if let Some(t) = value.filter(|t| *t > 0) {
+            out.push(format!("{label} {t}°C"));
         }
     }
+    if let Some(p) = gpu.performance_state {
+        out.push(format!("P{p}"));
+    }
+    if let Some(level) = gpu.detail.get("thermal_pressure") {
+        out.push(format!("thermal {level}"));
+    }
+    if let Some(rpm) = gpu.fan_speed_rpm {
+        out.push(format!("fan {rpm} rpm"));
+    }
+    if let Some(v) = gpu.detail.get("driver_version") {
+        out.push(if v.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            format!("driver {v}")
+        } else {
+            v.clone()
+        });
+    }
+    if let Some(v) = gpu.detail.get("cuda_version") {
+        out.push(format!("CUDA {v}"));
+    }
+    let gsp = match gpu.gsp_firmware_mode {
+        Some(0) => Some("off"),
+        Some(1) => Some("on"),
+        Some(2) => Some("default"),
+        _ => None,
+    };
+    if let Some(mode) = gsp {
+        out.push(format!("GSP {mode}"));
+    }
+    if let (Some(gen_max), Some(width)) = (
+        gpu.detail.get("pcie_gen_max"),
+        gpu.detail.get("pcie_width_max"),
+    ) {
+        out.push(format!("PCIe {gen_max}.0 x{width}"));
+    }
+    if let Some(ecc) = gpu.detail.get("ecc_mode_current") {
+        out.push(format!("ECC {}", ecc.to_lowercase()));
+    }
+    if let Some(numa) = gpu.numa_node_id.filter(|n| *n >= 0) {
+        out.push(format!("NUMA {numa}"));
+    }
+    if !gpu.nvlink_remote_devices.is_empty() {
+        out.push(format!("NVLink ×{}", gpu.nvlink_remote_devices.len()));
+    }
+    out
+}
+
+/// Vendor and model without edition suffixes: "NVIDIA RTX PRO 6000
+/// Blackwell Workstation Edition" becomes "NVIDIA RTX PRO 6000 Blackwell",
+/// "Apple M5 Ultra GPU" becomes "Apple M5 Ultra".
+pub fn device_name(gpu: &GpuInfo) -> String {
+    let mut s = gpu.name.trim();
     for suffix in [
+        " Max-Q Workstation Edition",
         " Workstation Edition",
         " Server Edition",
-        " Max-Q Workstation Edition",
     ] {
         if let Some(rest) = s.strip_suffix(suffix) {
             s = rest;
         }
     }
+    if is_unified(gpu)
+        && let Some(rest) = s.strip_suffix(" GPU")
+    {
+        s = rest;
+    }
     s.to_string()
+}
+
+/// "AMD EPYC 9275F 24-Core Processor" → "AMD EPYC 9275F".
+fn cpu_model_label(model: &str) -> String {
+    let mut words: Vec<&str> = model
+        .split_whitespace()
+        .filter(|w| !matches!(*w, "Processor" | "CPU" | "(R)" | "(TM)"))
+        .collect();
+    if let Some(pos) = words
+        .iter()
+        .position(|w| w.to_ascii_lowercase().ends_with("-core"))
+    {
+        words.truncate(pos);
+    }
+    words.join(" ")
+}
+
+fn os_label(os: &str) -> String {
+    match os {
+        "macos" => "macOS".to_string(),
+        "linux" => "Linux".to_string(),
+        "windows" => "Windows".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// "ians-Mac-Studio.local" reads better without the mDNS suffix.
@@ -339,6 +538,22 @@ pub(crate) mod tests {
             gpm_metrics: None,
             detail,
         }
+    }
+
+    pub(crate) fn model_of(
+        gpus: &[GpuInfo],
+        cpus: &[CpuInfo],
+        tabs: &[String],
+        statuses: &HashMap<String, ConnectionStatus>,
+    ) -> ConsolidatedModel {
+        ConsolidatedModel::build(&ModelSources {
+            gpu_info: gpus,
+            cpu_info: cpus,
+            memory_info: &[],
+            host_probes: &[],
+            host_order: tabs,
+            connection_status: statuses,
+        })
     }
 
     pub(crate) fn mac_and_box() -> (Vec<GpuInfo>, Vec<String>, HashMap<String, ConnectionStatus>) {
@@ -391,10 +606,14 @@ pub(crate) mod tests {
     #[test]
     fn groups_devices_by_host_in_tab_order_and_labels_memory() {
         let (gpus, tabs, statuses) = mac_and_box();
-        let model = ConsolidatedModel::build(&gpus, &[], &tabs, &statuses);
+        let model = model_of(&gpus, &[], &tabs, &statuses);
         assert_eq!(model.hosts.len(), 2);
         assert_eq!(model.hosts[0].label, "ians-Mac-Studio");
-        assert_eq!(model.hosts[0].devices[0].name, "M5 Ultra GPU");
+        assert_eq!(model.hosts[0].devices[0].name, "Apple M5 Ultra");
+        assert_eq!(
+            model.hosts[0].devices[0].label(),
+            "Apple M5 Ultra · 80-core GPU"
+        );
         assert_eq!(model.hosts[0].devices[0].memory_kind, MemoryKind::Unified);
         assert_eq!(model.hosts[0].devices[0].ane_watts, Some(1.5));
         assert_eq!(model.hosts[1].label, "vllm");
@@ -405,7 +624,10 @@ pub(crate) mod tests {
             .collect();
         assert_eq!(
             names,
-            ["RTX PRO 6000 Blackwell #0", "RTX PRO 6000 Blackwell #1"]
+            [
+                "NVIDIA RTX PRO 6000 Blackwell #0",
+                "NVIDIA RTX PRO 6000 Blackwell #1"
+            ]
         );
         assert_eq!(model.hosts[1].devices[0].memory_kind, MemoryKind::Dedicated);
         assert_eq!(model.hosts[1].devices[0].power_limit_watts, Some(600.0));
@@ -416,7 +638,7 @@ pub(crate) mod tests {
     fn totals_split_unified_and_dedicated() {
         const GIB: u64 = 1 << 30;
         let (gpus, tabs, statuses) = mac_and_box();
-        let t = ConsolidatedModel::build(&gpus, &[], &tabs, &statuses).totals;
+        let t = model_of(&gpus, &[], &tabs, &statuses).totals;
         assert_eq!(t.devices, 3);
         assert_eq!((t.hosts_up, t.hosts_total), (2, 2));
         assert_eq!(t.unified_used, 154 * GIB);
@@ -436,7 +658,7 @@ pub(crate) mod tests {
             .collect();
         let s = statuses.get_mut("10.10.10.2:9090").unwrap();
         s.mark_failure("Connection refused".to_string());
-        let model = ConsolidatedModel::build(&mac_down, &[], &tabs, &statuses);
+        let model = model_of(&mac_down, &[], &tabs, &statuses);
         let mac = &model.hosts[0];
         assert!(!mac.connected);
         assert!(mac.devices.is_empty());
@@ -450,7 +672,7 @@ pub(crate) mod tests {
         let mut g = gpu("h:1", "u", "NVIDIA X", 0);
         g.utilization = crate::device::types::GPU_METRIC_UNAVAILABLE;
         g.power_consumption = crate::device::types::GPU_METRIC_UNAVAILABLE;
-        let model = ConsolidatedModel::build(&[g], &[], &[], &HashMap::new());
+        let model = model_of(&[g], &[], &[], &HashMap::new());
         let d = &model.hosts[0].devices[0];
         assert_eq!(d.utilization, None);
         assert_eq!(d.power_watts, None);
@@ -500,7 +722,7 @@ pub(crate) mod tests {
             per_core_utilization: Vec::new(),
             time: String::new(),
         };
-        let model = ConsolidatedModel::build(&gpus, &[cpu], &tabs, &statuses);
+        let model = model_of(&gpus, &[cpu], &tabs, &statuses);
         assert_eq!(model.hosts[0].devices[0].core_count, Some(80));
         assert_eq!(model.hosts[0].cpu_power_watts, Some(7.5));
         assert_eq!(model.hosts[1].devices[0].core_count, None);
@@ -508,13 +730,97 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn short_names() {
-        assert_eq!(
-            short_device_name("NVIDIA RTX PRO 6000 Blackwell Workstation Edition"),
-            "RTX PRO 6000 Blackwell"
+    fn names_and_labels() {
+        let rtx = gpu(
+            "h",
+            "u",
+            "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+            0,
         );
-        assert_eq!(short_device_name("Apple M5 Ultra GPU"), "M5 Ultra GPU");
+        assert_eq!(device_name(&rtx), "NVIDIA RTX PRO 6000 Blackwell");
+        let mac = gpu("h", "u", "Apple M5 Ultra GPU", 0);
+        assert_eq!(device_name(&mac), "Apple M5 Ultra");
         assert_eq!(short_host_label("ians-Mac-Studio.local"), "ians-Mac-Studio");
         assert_eq!(short_host_label("vllm"), "vllm");
+        assert_eq!(
+            cpu_model_label("AMD EPYC 9275F 24-Core Processor"),
+            "AMD EPYC 9275F"
+        );
+        assert_eq!(cpu_model_label("Apple M5 Ultra"), "Apple M5 Ultra");
+        assert_eq!(os_label("macos"), "macOS");
+    }
+
+    #[test]
+    fn unified_memory_is_counted_once_and_host_ram_separately() {
+        const GIB: u64 = 1 << 30;
+        let (gpus, tabs, statuses) = mac_and_box();
+        let mem = |host: &str, used: u64, total: u64| MemoryInfo {
+            index: 0,
+            host_id: host.to_string(),
+            hostname: host.to_string(),
+            instance: host.to_string(),
+            total_bytes: total * GIB,
+            used_bytes: used * GIB,
+            available_bytes: 0,
+            free_bytes: 0,
+            buffers_bytes: 0,
+            cached_bytes: 0,
+            swap_total_bytes: 0,
+            swap_used_bytes: 0,
+            swap_free_bytes: 0,
+            utilization: 0.0,
+            time: String::new(),
+        };
+        let memory = [
+            mem("10.10.10.2:9090", 154, 256),
+            mem("10.10.10.1:9090", 262, 503),
+        ];
+        let probes = [HostProbes {
+            host_id: "10.10.10.2:9090".to_string(),
+            os: Some("macos".to_string()),
+            ..Default::default()
+        }];
+        let model = ConsolidatedModel::build(&ModelSources {
+            gpu_info: &gpus,
+            cpu_info: &[],
+            memory_info: &memory,
+            host_probes: &probes,
+            host_order: &tabs,
+            connection_status: &statuses,
+        });
+        let t = &model.totals;
+        assert_eq!((t.unified_used, t.unified_total), (154 * GIB, 256 * GIB));
+        assert_eq!((t.host_ram_used, t.host_ram_total), (262 * GIB, 503 * GIB));
+        assert_eq!(t.unified_devices, 1);
+        assert_eq!(t.max_temperature, Some((40, None)));
+        assert!(model.hosts[0].has_unified_memory());
+        assert_eq!(model.hosts[0].os.as_deref(), Some("macOS"));
+        assert_eq!(model.hosts[1].ram_total, 503 * GIB);
+        assert_eq!(model.hosts[1].os, None);
+    }
+
+    #[test]
+    fn details_collect_thresholds_pstate_and_driver() {
+        let mut g = gpu("h", "u", "NVIDIA X", 0);
+        g.temperature_threshold_slowdown = Some(95);
+        g.temperature_threshold_shutdown = Some(98);
+        g.performance_state = Some(1);
+        g.gsp_firmware_mode = Some(2);
+        g.detail
+            .insert("driver_version".to_string(), "595.45.04".to_string());
+        g.detail.insert("pcie_gen_max".to_string(), "5".to_string());
+        g.detail
+            .insert("pcie_width_max".to_string(), "16".to_string());
+        assert_eq!(
+            device_details(&g),
+            [
+                "slowdown 95°C",
+                "shutdown 98°C",
+                "P1",
+                "driver 595.45.04",
+                "GSP default",
+                "PCIe 5.0 x16"
+            ]
+        );
     }
 }

@@ -198,6 +198,11 @@ fn render_shortcuts_section(
             "Jump to Consolidated tab (view --consolidated)",
             "shortcut",
         ),
+        (
+            "  X",
+            "Show device details on the All tab (thresholds, P-state, driver)",
+            "shortcut",
+        ),
         ("  Q", "Exit application", "shortcut"),
         ("  ESC", "Close help / clear filter / exit", "shortcut"),
         ("", "", ""),

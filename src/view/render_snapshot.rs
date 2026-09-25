@@ -190,6 +190,8 @@ pub struct RenderSnapshot {
     pub consolidated: Option<ConsolidatedState>,
     /// Per-device and per-link history (remote view mode).
     pub device_series: SeriesHistory,
+    /// `x` details toggle.
+    pub show_details: bool,
 }
 
 impl RenderSnapshot {
@@ -307,6 +309,7 @@ impl RenderSnapshot {
             host_probes: state.host_probes.clone(),
             consolidated: state.consolidated.clone(),
             device_series: state.device_series.clone(),
+            show_details: state.show_details,
         }
     }
 
@@ -424,6 +427,7 @@ impl RenderSnapshot {
         state.host_probes = self.host_probes.clone();
         state.consolidated = self.consolidated.clone();
         state.device_series = self.device_series.clone();
+        state.show_details = self.show_details;
 
         state
     }

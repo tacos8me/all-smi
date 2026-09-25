@@ -438,6 +438,9 @@ pub struct AppState {
     /// collection cycle. Feeds the All tab's history charts and the
     /// Consolidated tab's sparklines.
     pub device_series: SeriesHistory,
+    /// `x`: show per-device details (thermal thresholds, P-state,
+    /// driver / GSP firmware) under each device row on the All tab.
+    pub show_details: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -579,6 +582,7 @@ impl AppState {
             host_probes: Vec::new(),
             consolidated: None,
             device_series: SeriesHistory::default(),
+            show_details: false,
         }
     }
 

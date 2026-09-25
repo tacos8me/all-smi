@@ -24,6 +24,8 @@
 //! probes, not from here. Every field is optional so an endpoint that
 //! grows or drops a key degrades to a blank instead of a parse failure.
 
+use std::time::{Duration, Instant};
+
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -32,21 +34,61 @@ use serde_json::Value;
 pub const DEFAULT_HEALTH_URL: &str = "http://10.10.10.1:10051/health";
 pub const DEFAULT_SWAP_URL: &str = "http://10.10.10.2:8080";
 
-/// Where the pipeline panel reads from.
+/// Where the pipeline panel reads from, and how its two halves are named.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PipelineConfig {
     pub title: String,
+    /// Model served, shown after the title.
+    pub subtitle: String,
     pub health_url: String,
     /// llama-swap base URL; `/running` is appended.
     pub swap_url: String,
+    /// The engine host (first half: prefill and the early layers of
+    /// every decode step) and the host that finishes each step.
+    pub front: Stage,
+    pub back: Stage,
+    /// Name of the link between them.
+    pub link: String,
+    /// JSON probe names the back host's exporter publishes
+    /// (`api --json-probe`): the serving supervisor's `/health`, the
+    /// worker's split-pipeline counters, and its server status.
+    pub probe_supervisor: String,
+    pub probe_split: String,
+    pub probe_server: String,
+}
+
+/// One half of the split.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stage {
+    /// Short machine name ("RTX box").
+    pub name: String,
+    /// What it runs ("layers 0-19").
+    pub role: String,
+    /// The role in a few characters, for the one-line strip ("L0-19").
+    pub short: String,
 }
 
 impl PipelineConfig {
     pub fn icculis(health_url: Option<String>, swap_url: Option<String>) -> Self {
         Self {
-            title: "Icculis pipeline".to_string(),
+            title: "Icculis".to_string(),
+            subtitle: "DeepSeek-V4.1-Flash · original weights".to_string(),
             health_url: health_url.unwrap_or_else(|| DEFAULT_HEALTH_URL.to_string()),
             swap_url: swap_url.unwrap_or_else(|| DEFAULT_SWAP_URL.to_string()),
+            front: Stage {
+                name: "RTX box".to_string(),
+                role: "layers 0-19 · prefill + verify".to_string(),
+                short: "L0-19".to_string(),
+            },
+            back: Stage {
+                name: "M5 Ultra".to_string(),
+                role: "layers 20-39 · head · DSpark draft".to_string(),
+                short: "L20-39 + head + draft".to_string(),
+            },
+            link: "10GbE".to_string(),
+            probe_supervisor: "sup".to_string(),
+            probe_split: "og".to_string(),
+            probe_server: "omlx".to_string(),
         }
     }
 
@@ -124,6 +166,16 @@ impl EngineHealth {
     pub fn is_busy(&self) -> bool {
         self.gpu_job_label().is_some()
     }
+
+    /// The GPU job is part of a prefill: chunks, the vision encoder, a
+    /// prefix-cache restore or the snapshot that saves one.
+    pub fn is_prefill(&self) -> bool {
+        self.gpu_job_label().is_some_and(|job| {
+            ["prefill", "vision", "restore", "snapshot"]
+                .iter()
+                .any(|k| job.starts_with(k))
+        })
+    }
 }
 
 /// One llama-swap `/running` entry.
@@ -170,6 +222,12 @@ pub struct PipelineStatus {
     pub config: PipelineConfig,
     pub engine: Probe<EngineHealth>,
     pub swap: Probe<Vec<SwapModel>>,
+    /// First poll of the prefill in progress, if one is.
+    pub prefill_since: Option<Instant>,
+    /// How long the prefill in progress has run, as of the last poll.
+    pub prefill_elapsed: Option<Duration>,
+    /// Duration of the last finished prefill (as seen by the poller).
+    pub last_prefill: Option<Duration>,
 }
 
 impl PipelineStatus {
@@ -178,6 +236,20 @@ impl PipelineStatus {
             config,
             engine: Probe::Pending,
             swap: Probe::Pending,
+            prefill_since: None,
+            prefill_elapsed: None,
+            last_prefill: None,
+        }
+    }
+
+    /// Track the prefill phase across polls at time `now`.
+    pub fn observe_phase(&mut self, now: Instant) {
+        let prefill = matches!(&self.engine, Probe::Ok(h) if h.is_prefill());
+        if prefill {
+            let since = *self.prefill_since.get_or_insert(now);
+            self.prefill_elapsed = Some(now.saturating_duration_since(since));
+        } else if self.prefill_since.take().is_some() {
+            self.last_prefill = self.prefill_elapsed.take();
         }
     }
 }
@@ -242,6 +314,26 @@ mod tests {
         assert_eq!(models[0].state, "ready");
         assert_eq!(models[0].name, "Icculis");
         assert!(parse_swap_running(br#"{"running":[]}"#).unwrap().is_empty());
+    }
+
+    #[test]
+    fn prefill_phase_is_timed_across_polls() {
+        let mut p = PipelineStatus::new(PipelineConfig::icculis(None, None));
+        let t0 = Instant::now();
+        let prefill =
+            EngineHealth::parse(br#"{"gpu_job": "prefill_chunk", "gpu_job_s": 0.4}"#).unwrap();
+        assert!(prefill.is_prefill());
+        p.engine = Probe::Ok(prefill.clone());
+        p.observe_phase(t0);
+        p.observe_phase(t0 + Duration::from_secs(3));
+        assert_eq!(p.prefill_elapsed, Some(Duration::from_secs(3)));
+        let step = EngineHealth::parse(br#"{"gpu_job": "step"}"#).unwrap();
+        assert!(!step.is_prefill());
+        p.engine = Probe::Ok(step);
+        p.observe_phase(t0 + Duration::from_secs(4));
+        assert_eq!(p.prefill_since, None);
+        assert_eq!(p.prefill_elapsed, None);
+        assert_eq!(p.last_prefill, Some(Duration::from_secs(3)));
     }
 
     #[test]

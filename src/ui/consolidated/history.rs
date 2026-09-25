@@ -41,6 +41,10 @@ pub fn util_key(uuid: &str) -> String {
 pub fn power_key(uuid: &str) -> String {
     format!("power:{uuid}")
 }
+/// Memory in use, as a percentage of the device's capacity.
+pub fn mem_key(uuid: &str) -> String {
+    format!("mem:{uuid}")
+}
 pub fn net_rx_key(host_id: &str, iface: &str) -> String {
     format!("net_rx:{host_id}/{iface}")
 }
@@ -106,6 +110,12 @@ impl SeriesHistory {
                 self.push(power_key(&gpu.uuid), watts);
                 total_power += watts;
             }
+            if gpu.total_memory > 0 {
+                self.push(
+                    mem_key(&gpu.uuid),
+                    gpu.used_memory as f64 * 100.0 / gpu.total_memory as f64,
+                );
+            }
         }
         if !gpu_info.is_empty() {
             self.push(TOTAL_POWER_KEY.to_string(), total_power);
@@ -157,6 +167,7 @@ impl ConsolidatedState {
             }
             Err(e) => pipeline.engine = Probe::Err(e),
         }
+        pipeline.observe_phase(std::time::Instant::now());
     }
 
     /// Store one llama-swap `/running` poll.
@@ -253,7 +264,11 @@ mod tests {
             }],
             ..Default::default()
         }];
+        idle.used_memory = 1;
+        idle.total_memory = 4;
         series.record_collection(&[idle, unavailable], &probes);
+        assert_eq!(series.values(&mem_key("gpu-a")), vec![25.0]);
+        assert!(series.values(&mem_key("gpu-b")).is_empty());
         assert_eq!(series.values(&power_key("gpu-a")), vec![90.0]);
         assert!(series.values(&power_key("gpu-b")).is_empty());
         assert_eq!(series.values(TOTAL_POWER_KEY), vec![90.0]);

@@ -24,15 +24,18 @@
 //!
 //! * [`history`] — the per-series ring buffers behind the sparklines,
 //!   recorded by the remote collector each cycle.
-//! * [`model`] — a pure view model built from the render snapshot.
+//! * [`model`] — a pure view model built from the render snapshot, shared
+//!   with the All tab.
 //! * [`pipeline`] — the optional pipeline panel's endpoint data
 //!   (`--icculis`: engine `/health`, llama-swap `/running`).
+//! * [`pipeline_view`] — what each half of the split pipeline is doing.
 //! * [`render`] — writes the model into the frame buffer.
 
 pub mod history;
 pub mod model;
 pub mod pipeline;
-mod pipeline_render;
+pub mod pipeline_render;
+pub mod pipeline_view;
 pub mod render;
 
 pub use history::ConsolidatedState;

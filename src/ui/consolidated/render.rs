@@ -19,39 +19,35 @@
 //! sparklines), a combined total, then the host probes. Columns and
 //! sparklines shrink or drop with the terminal width, and output stops at
 //! the row budget the frame renderer hands in, so the tab never scrolls
-//! the function-key footer off screen.
+//! the function-key footer off screen. Colors come from [`crate::ui::theme`].
 
 use std::collections::HashMap;
 use std::io::Write;
 
-use crossterm::{
-    queue,
-    style::{Color, Print},
-};
-
 use crate::app_state::ConnectionStatus;
-use crate::common::config::ThemeConfig;
-use crate::device::{CpuInfo, GpuInfo};
+use crate::device::{CpuInfo, GpuInfo, MemoryInfo};
 use crate::probes::HostProbes;
 use crate::ui::braille::sparkline_braille;
-use crate::ui::text::{display_width, print_colored_text, truncate_to_width};
+use crate::ui::cluster::charts;
+use crate::ui::cluster::line::{
+    GIB, Line, Writer, fit_keeping_index, fmt_duration, fmt_rate, fmt_watts, plural,
+};
+use crate::ui::theme::{self, ACCENT, CRIT, MUTED, OK, SUBTLE, TEXT};
 
 use super::history::{self, ConsolidatedState, SeriesHistory};
-use super::model::{ConsolidatedModel, DeviceRow, HostSection};
+use super::model::{ConsolidatedModel, DeviceRow, HostSection, ModelSources};
 use super::pipeline_render;
+use super::pipeline_view::PipelineView;
 
-const GIB: f64 = (1u64 << 30) as f64;
 /// Width of the second column of the probe and pipeline rows (host label,
 /// or host label and port).
 pub(crate) const SUBJECT: usize = 22;
-const LABEL: Color = Color::DarkGrey;
-const VALUE: Color = Color::White;
-const HEADING: Color = Color::Cyan;
 
 /// Borrowed inputs so the renderer stays independent of `RenderSnapshot`.
 pub struct ConsolidatedInputs<'a> {
     pub gpu_info: &'a [GpuInfo],
     pub cpu_info: &'a [CpuInfo],
+    pub memory_info: &'a [MemoryInfo],
     /// Tab strip, used for host order.
     pub tabs: &'a [String],
     pub connection_status: &'a HashMap<String, ConnectionStatus>,
@@ -61,6 +57,8 @@ pub struct ConsolidatedInputs<'a> {
     pub state: &'a ConsolidatedState,
     /// Wall-clock seconds, for "held for" durations.
     pub now_unix: u64,
+    /// Collection interval, to label the history span.
+    pub interval_secs: u64,
 }
 
 /// Render the tab body into `out` using at most `rows` terminal rows.
@@ -70,12 +68,14 @@ pub fn render_consolidated_tab<W: Write>(
     cols: u16,
     rows: u16,
 ) {
-    let model = ConsolidatedModel::build(
-        inputs.gpu_info,
-        inputs.cpu_info,
-        inputs.tabs,
-        inputs.connection_status,
-    );
+    let model = ConsolidatedModel::build(&ModelSources {
+        gpu_info: inputs.gpu_info,
+        cpu_info: inputs.cpu_info,
+        memory_info: inputs.memory_info,
+        host_probes: inputs.host_probes,
+        host_order: inputs.tabs,
+        connection_status: inputs.connection_status,
+    });
     let layout = Columns::for_width(cols as usize);
     let mut w = Writer {
         out,
@@ -91,6 +91,12 @@ pub fn render_consolidated_tab<W: Write>(
     w.rule();
     render_totals(&mut w, &layout, &model, inputs.series);
     render_probes(&mut w, &layout, &model, inputs);
+
+    // The rows left over hold the same history panel as the All tab.
+    if w.rows_left > charts::MIN_ROWS {
+        w.blank();
+        charts::render_history(&mut w, &model, inputs.series, inputs.interval_secs);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -99,35 +105,37 @@ pub fn render_consolidated_tab<W: Write>(
 
 fn render_title<W: Write>(w: &mut Writer<'_, W>, model: &ConsolidatedModel) {
     let t = &model.totals;
-    let mut line = Line::default();
-    line.text("Consolidated", HEADING).text(
+    let mut title = Line::default();
+    title.text("Consolidated", ACCENT);
+    let mut note = Line::default();
+    note.text(
         &format!(
-            "  {} on {} ({} up) as one system",
+            "{} on {} ({} up) as one system",
             plural(t.devices, "accelerator"),
             plural(t.hosts_total, "host"),
             t.hosts_up
         ),
-        VALUE,
+        MUTED,
     );
-    w.emit(line);
+    w.heading(&title, Some(&note));
 }
 
 fn render_device_header<W: Write>(w: &mut Writer<'_, W>, c: &Columns) {
     let mut line = Line::default();
-    line.cell("HOST", c.host, LABEL)
-        .cell("DEVICE", c.device, LABEL)
-        .rcell("UTIL", c.util, LABEL)
-        .cell("MEMORY", c.mem, LABEL)
-        .rcell("POWER", c.power, LABEL)
-        .rcell("TEMP", c.temp, LABEL);
+    line.cell("HOST", c.host, MUTED)
+        .cell("DEVICE", c.device, MUTED)
+        .rcell("UTIL", c.util, MUTED)
+        .cell("MEMORY", c.mem, MUTED)
+        .rcell("POWER", c.power, MUTED)
+        .rcell("TEMP", c.temp, MUTED);
     if c.clock > 0 {
-        line.rcell("CLOCK", c.clock, LABEL);
+        line.rcell("CLOCK", c.clock, MUTED);
     }
     if c.spark_util > 0 {
-        line.cell(" UTIL HISTORY", c.spark_util + 1, LABEL);
+        line.cell(" UTIL HISTORY", c.spark_util + 1, MUTED);
     }
     if c.spark_power > 0 {
-        line.cell(" POWER HISTORY", c.spark_power + 1, LABEL);
+        line.cell(" POWER HISTORY", c.spark_power + 1, MUTED);
     }
     w.emit(line);
 }
@@ -138,7 +146,7 @@ fn render_host<W: Write>(
     host: &HostSection,
     series: &SeriesHistory,
 ) {
-    let host_color = if host.connected { VALUE } else { Color::Red };
+    let host_color = if host.connected { TEXT } else { CRIT };
     if host.devices.is_empty() {
         let mut line = Line::default();
         line.cell(&host.label, c.host, host_color);
@@ -150,7 +158,7 @@ fn render_host<W: Write>(
                 host.last_error.as_deref().unwrap_or("no response yet")
             )
         };
-        line.text(&reason, LABEL);
+        line.text(&reason, MUTED);
         w.emit(line);
         return;
     }
@@ -164,7 +172,7 @@ fn render_host<W: Write>(
         let extras = device_extras(device, host);
         if !extras.is_empty() {
             let mut sub = Line::default();
-            sub.cell("", c.host, LABEL).text(&extras, LABEL);
+            sub.cell("", c.host, MUTED).text(&extras, MUTED);
             w.emit(sub);
         }
     }
@@ -177,31 +185,23 @@ fn render_device_cells(
     connected: bool,
     series: &SeriesHistory,
 ) {
-    let dim = |color: Color| if connected { color } else { LABEL };
+    let tone = |color| if connected { color } else { MUTED };
     let room = c.device.saturating_sub(1);
-    let mut name = match d.core_count {
-        Some(n) if display_width(&d.name) + 12 <= room => format!("{} ({n} cores)", d.name),
-        _ => d.name.clone(),
-    };
+    let mut name = d.label();
     if !connected {
         name.push_str(" (stale)");
     }
-    line.cell(&fit_keeping_index(&name, room), c.device, dim(VALUE));
+    line.cell(&fit_keeping_index(&name, room), c.device, tone(TEXT));
 
     match d.utilization {
         Some(u) => line.rcell(
             &format!("{u:.1}%"),
             c.util,
-            dim(ThemeConfig::utilization_color(u).max_contrast()),
+            tone(theme::util_level(u).value_color()),
         ),
-        None => line.rcell("n/a", c.util, LABEL),
+        None => line.rcell("n/a", c.util, MUTED),
     };
 
-    let ratio = if d.total_memory > 0 {
-        d.used_memory as f64 / d.total_memory as f64
-    } else {
-        0.0
-    };
     let mem = format!(
         "{:.1}/{:.1} GiB {}",
         d.used_memory as f64 / GIB,
@@ -211,7 +211,7 @@ fn render_device_cells(
     line.cell(
         &mem,
         c.mem,
-        dim(ThemeConfig::progress_bar_color(ratio).max_contrast()),
+        tone(theme::mem_level(d.memory_ratio()).value_color()),
     );
 
     let power = match (d.power_watts, d.power_limit_watts) {
@@ -219,22 +219,29 @@ fn render_device_cells(
         (Some(p), None) => fmt_watts(p),
         (None, _) => "n/a".to_string(),
     };
-    line.rcell(&power, c.power, dim(VALUE));
-    let temp = d
-        .temperature_c
-        .map_or_else(|| "n/a".to_string(), |t| format!("{t}°C"));
-    line.rcell(&temp, c.temp, dim(VALUE));
+    let power_color = d
+        .power_ratio()
+        .map_or(TEXT, |r| theme::power_level(r).value_color());
+    line.rcell(&power, c.power, tone(power_color));
+    match d.temperature_c {
+        Some(t) => line.rcell(
+            &format!("{t}°C"),
+            c.temp,
+            tone(theme::temp_level(t, d.slowdown_c).value_color()),
+        ),
+        None => line.rcell("n/a", c.temp, MUTED),
+    };
     if c.clock > 0 {
         let clock = d
             .frequency_mhz
             .map_or_else(|| "n/a".to_string(), |f| format!("{f} MHz"));
-        line.rcell(&clock, c.clock, dim(VALUE));
+        line.rcell(&clock, c.clock, tone(SUBTLE));
     }
     if c.spark_util > 0 {
         let data = series.values(&history::util_key(&d.uuid));
-        line.text(" ", VALUE).text(
+        line.text(" ", MUTED).text(
             &sparkline_braille(&data, c.spark_util, Some((0.0, 100.0))),
-            dim(Color::Green),
+            tone(ACCENT),
         );
     }
     if c.spark_power > 0 {
@@ -243,9 +250,9 @@ fn render_device_cells(
             .power_limit_watts
             .unwrap_or(0.0)
             .max(data.iter().copied().fold(1.0, f64::max));
-        line.text(" ", VALUE).text(
+        line.text(" ", MUTED).text(
             &sparkline_braille(&data, c.spark_power, Some((0.0, ceiling))),
-            dim(Color::Yellow),
+            tone(SUBTLE),
         );
     }
 }
@@ -276,11 +283,11 @@ fn render_totals<W: Write>(
 ) {
     let t = &model.totals;
     let mut line = Line::default();
-    line.cell("TOTAL", c.host, HEADING)
-        .cell(&plural(t.devices, "accelerator"), c.device, VALUE);
+    line.cell("TOTAL", c.host, ACCENT)
+        .cell(&plural(t.devices, "accelerator"), c.device, TEXT);
     match t.avg_utilization {
-        Some(u) => line.rcell(&format!("{u:.1}%"), c.util, VALUE),
-        None => line.rcell("n/a", c.util, LABEL),
+        Some(u) => line.rcell(&format!("{u:.1}%"), c.util, TEXT),
+        None => line.rcell("n/a", c.util, MUTED),
     };
     let pct = if t.memory_total() > 0 {
         t.memory_used() as f64 * 100.0 / t.memory_total() as f64
@@ -294,18 +301,18 @@ fn render_totals<W: Write>(
             t.memory_total() as f64 / GIB
         ),
         c.mem,
-        VALUE,
+        TEXT,
     )
-    .rcell(&fmt_watts(t.power_watts()), c.power, VALUE)
-    .rcell("", c.temp, VALUE);
+    .rcell(&fmt_watts(t.power_watts()), c.power, TEXT)
+    .rcell("", c.temp, TEXT);
     if c.clock > 0 {
-        line.rcell("", c.clock, VALUE);
+        line.rcell("", c.clock, TEXT);
     }
     if c.spark_util > 0 {
         let data = series.values(history::TOTAL_UTIL_KEY);
-        line.text(" ", VALUE).text(
+        line.text(" ", MUTED).text(
             &sparkline_braille(&data, c.spark_util, Some((0.0, 100.0))),
-            Color::Green,
+            ACCENT,
         );
     }
     if c.spark_power > 0 {
@@ -316,9 +323,9 @@ fn render_totals<W: Write>(
             .iter()
             .copied()
             .fold(t.power_limit_watts.max(1.0), f64::max);
-        line.text(" ", VALUE).text(
+        line.text(" ", MUTED).text(
             &sparkline_braille(&data, c.spark_power, Some((0.0, ceiling))),
-            Color::Yellow,
+            SUBTLE,
         );
     }
     w.emit(line);
@@ -344,8 +351,8 @@ fn render_totals<W: Write>(
     if !parts.is_empty() {
         let mut split = Line::default();
         split
-            .cell("", c.host, LABEL)
-            .text(&parts.join(" · "), LABEL);
+            .cell("", c.host, MUTED)
+            .text(&parts.join(" · "), MUTED);
         w.emit(split);
     }
 }
@@ -360,11 +367,13 @@ fn render_probes<W: Write>(
     let has_links = inputs.host_probes.iter().any(|p| !p.interfaces.is_empty());
     let has_locks = inputs.host_probes.iter().any(|p| !p.locks.is_empty());
     if let Some(pipeline) = inputs.state.pipeline.as_ref() {
-        // The pipeline panel (`--icculis`) groups the engine and
-        // llama-swap with the lock holder and link it depends on.
+        // The pipeline panel (`--icculis`): the split as a diagram, then
+        // the engine, llama-swap, lock holder and link it depends on.
         w.blank();
         pipeline_render::render_pipeline_heading(w, pipeline);
-        pipeline_render::render_engine(w, c, model, pipeline, &inputs.state.history);
+        let view = PipelineView::build(model, pipeline, inputs.host_probes);
+        pipeline_render::render_diagram(w, pipeline, &view);
+        pipeline_render::render_engine_details(w, c, model, pipeline, &inputs.state.history);
         pipeline_render::render_swap(w, c, model, pipeline);
         if has_locks {
             render_locks(w, c, model, inputs);
@@ -400,13 +409,13 @@ pub(crate) fn render_links<W: Write>(
     for host in ordered_probes(model, inputs.host_probes) {
         for iface in &host.interfaces {
             let mut line = Line::default();
-            line.cell("LINK", c.host, HEADING)
-                .cell(&model.host_label(&host.host_id), SUBJECT, VALUE)
-                .cell(&iface.interface, 16, VALUE)
-                .text("↓ ", LABEL)
-                .rcell(&fmt_rate(iface.rx_bytes_per_sec), 11, Color::Green)
-                .text("  ↑ ", LABEL)
-                .rcell(&fmt_rate(iface.tx_bytes_per_sec), 11, Color::Yellow);
+            line.cell("LINK", c.host, MUTED)
+                .cell(&model.host_label(&host.host_id), SUBJECT, TEXT)
+                .cell(&iface.interface, 16, SUBTLE)
+                .text("↓ ", MUTED)
+                .rcell(&fmt_rate(iface.rx_bytes_per_sec), 11, TEXT)
+                .text("  ↑ ", MUTED)
+                .rcell(&fmt_rate(iface.tx_bytes_per_sec), 11, TEXT);
             if spark > 0 {
                 let rx = inputs
                     .series
@@ -416,16 +425,10 @@ pub(crate) fn render_links<W: Write>(
                     .values(&history::net_tx_key(&host.host_id, &iface.interface));
                 // One shared ceiling so rx and tx read on the same scale.
                 let ceiling = rx.iter().chain(&tx).copied().fold(1_000_000.0, f64::max);
-                line.text("  ", VALUE)
-                    .text(
-                        &sparkline_braille(&rx, spark, Some((0.0, ceiling))),
-                        Color::Green,
-                    )
-                    .text(" ", VALUE)
-                    .text(
-                        &sparkline_braille(&tx, spark, Some((0.0, ceiling))),
-                        Color::Yellow,
-                    );
+                line.text("  ", MUTED)
+                    .text(&sparkline_braille(&rx, spark, Some((0.0, ceiling))), ACCENT)
+                    .text(" ", MUTED)
+                    .text(&sparkline_braille(&tx, spark, Some((0.0, ceiling))), SUBTLE);
             }
             w.emit(line);
         }
@@ -441,12 +444,12 @@ pub(crate) fn render_locks<W: Write>(
     for host in ordered_probes(model, inputs.host_probes) {
         for lock in &host.locks {
             let mut line = Line::default();
-            line.cell("LOCK", c.host, HEADING)
-                .cell(&model.host_label(&host.host_id), SUBJECT, VALUE)
-                .text(&tilde_home(&lock.path), VALUE)
-                .text("  ", VALUE);
+            line.cell("LOCK", c.host, MUTED)
+                .cell(&model.host_label(&host.host_id), SUBJECT, TEXT)
+                .text(&tilde_home(&lock.path), SUBTLE)
+                .text("  ", MUTED);
             if lock.holders.is_empty() {
-                line.text("free", Color::Green);
+                line.text("free", OK);
             } else {
                 let who = lock
                     .holders
@@ -454,14 +457,14 @@ pub(crate) fn render_locks<W: Write>(
                     .map(|h| format!("{} (pid {})", h.command, h.pid))
                     .collect::<Vec<_>>()
                     .join(", ");
-                line.text("held by ", LABEL).text(&who, Color::Yellow);
+                line.text("held by ", MUTED).text(&who, TEXT);
                 if let Some(since) = lock.since_unix {
                     line.text(
                         &format!(
                             " for {}",
                             fmt_duration(inputs.now_unix.saturating_sub(since))
                         ),
-                        LABEL,
+                        MUTED,
                     );
                 }
             }
@@ -485,7 +488,7 @@ fn ordered_probes<'a>(model: &ConsolidatedModel, probes: &'a [HostProbes]) -> Ve
 }
 
 // ---------------------------------------------------------------------------
-// Layout and line assembly
+// Layout
 // ---------------------------------------------------------------------------
 
 /// Column widths for the device table at a given terminal width.
@@ -506,7 +509,9 @@ impl Columns {
     /// clock and sparklines; wider ones widen the text columns first and
     /// give whatever is left to one or two sparklines.
     pub(crate) fn for_width(cols: usize) -> Self {
-        let mut c = if cols >= 120 {
+        let mut c = if cols >= 140 {
+            Self::base(17, 34, 8, 25, 12, 10)
+        } else if cols >= 120 {
             Self::base(17, 30, 8, 25, 12, 10)
         } else if cols >= 100 {
             Self::base(16, 26, 7, 24, 11, 10)
@@ -547,112 +552,9 @@ impl Columns {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct Line {
-    segs: Vec<(String, Color)>,
-}
-
-impl Line {
-    /// Display width of everything added so far.
-    pub(crate) fn width(&self) -> usize {
-        self.segs.iter().map(|(t, _)| display_width(t)).sum()
-    }
-
-    pub(crate) fn text(&mut self, s: &str, color: Color) -> &mut Self {
-        if !s.is_empty() {
-            self.segs.push((s.to_string(), color));
-        }
-        self
-    }
-
-    /// Left-aligned cell of exactly `width` columns (one trailing space is
-    /// reserved as the column gap).
-    pub(crate) fn cell(&mut self, s: &str, width: usize, color: Color) -> &mut Self {
-        let body = width.saturating_sub(1);
-        let t = truncate_to_width(s, body);
-        let pad = width.saturating_sub(display_width(&t));
-        self.segs.push((format!("{t}{}", " ".repeat(pad)), color));
-        self
-    }
-
-    /// Right-aligned cell of exactly `width` columns, gap on the right.
-    pub(crate) fn rcell(&mut self, s: &str, width: usize, color: Color) -> &mut Self {
-        let body = width.saturating_sub(1);
-        let t = truncate_to_width(s, body);
-        let pad = body.saturating_sub(display_width(&t));
-        self.segs.push((format!("{}{t} ", " ".repeat(pad)), color));
-        self
-    }
-}
-
-pub(crate) struct Writer<'w, W: Write> {
-    pub out: &'w mut W,
-    pub cols: usize,
-    pub rows_left: usize,
-}
-
-impl<W: Write> Writer<'_, W> {
-    /// Write one line clipped to the terminal width. Lines past the row
-    /// budget are dropped.
-    pub(crate) fn emit(&mut self, line: Line) {
-        if self.rows_left == 0 {
-            return;
-        }
-        self.rows_left -= 1;
-        let mut used = 0;
-        for (text, color) in line.segs {
-            if used >= self.cols {
-                break;
-            }
-            let t = truncate_to_width(&text, self.cols - used);
-            used += display_width(&t);
-            print_colored_text(self.out, &t, color, None, None);
-        }
-        queue!(self.out, Print("\r\n")).ok();
-    }
-
-    pub(crate) fn blank(&mut self) {
-        self.emit(Line::default());
-    }
-
-    pub(crate) fn rule(&mut self) {
-        let mut line = Line::default();
-        line.text(&"─".repeat(self.cols), LABEL);
-        self.emit(line);
-    }
-}
-
-/// Keep dark greys readable on the value columns: the theme maps idle
-/// readings to `DarkGrey`, which would make a live number look disabled.
-trait MaxContrast {
-    fn max_contrast(self) -> Color;
-}
-
-impl MaxContrast for Color {
-    fn max_contrast(self) -> Color {
-        if self == Color::DarkGrey { VALUE } else { self }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Formatting
 // ---------------------------------------------------------------------------
-
-/// Truncate a device name to `width`, keeping a trailing ` #<index>` so
-/// identical boards stay distinguishable on narrow terminals.
-fn fit_keeping_index(name: &str, width: usize) -> String {
-    if display_width(name) <= width {
-        return name.to_string();
-    }
-    match name.rfind(" #") {
-        Some(pos) if display_width(&name[pos..]) < width => {
-            let suffix = &name[pos..];
-            let head = truncate_to_width(&name[..pos], width - display_width(suffix));
-            format!("{}{suffix}", head.trim_end())
-        }
-        _ => truncate_to_width(name, width).into_owned(),
-    }
-}
 
 /// `/Users/ian/llm/x` → `~/llm/x` (and `/home/<user>/…`): the owner is
 /// implied by the host column, and the full path crowds out the holder.
@@ -667,57 +569,13 @@ fn tilde_home(path: &str) -> String {
     path.to_string()
 }
 
-fn plural(n: usize, noun: &str) -> String {
-    if n == 1 {
-        format!("1 {noun}")
-    } else {
-        format!("{n} {noun}s")
-    }
-}
-
-pub(crate) fn fmt_watts(w: f64) -> String {
-    if w >= 1000.0 {
-        format!("{:.2} kW", w / 1000.0)
-    } else if w >= 100.0 {
-        format!("{w:.0} W")
-    } else if w >= 1.0 {
-        format!("{w:.1} W")
-    } else {
-        format!("{w:.2} W")
-    }
-}
-
-/// Decimal network units, as link speeds are quoted.
-pub(crate) fn fmt_rate(bytes_per_sec: Option<f64>) -> String {
-    let Some(b) = bytes_per_sec else {
-        return "n/a".to_string();
-    };
-    if b >= 1e9 {
-        format!("{:.2} GB/s", b / 1e9)
-    } else if b >= 1e6 {
-        format!("{:.1} MB/s", b / 1e6)
-    } else if b >= 1e3 {
-        format!("{:.1} KB/s", b / 1e3)
-    } else {
-        format!("{b:.0} B/s")
-    }
-}
-
-pub(crate) fn fmt_duration(secs: u64) -> String {
-    match secs {
-        0..60 => format!("{secs}s"),
-        60..3600 => format!("{}m {:02}s", secs / 60, secs % 60),
-        3600..86400 => format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60),
-        _ => format!("{}d {:02}h", secs / 86400, (secs % 86400) / 3600),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::probes::lock::{LockHolder, LockSample};
     use crate::probes::net::NetInterfaceSample;
     use crate::ui::consolidated::model::tests::mac_and_box;
+    use crate::ui::text::display_width;
 
     fn strip_ansi(s: &str) -> String {
         let mut out = String::new();
@@ -751,12 +609,14 @@ mod tests {
         let inputs = ConsolidatedInputs {
             gpu_info: &gpus,
             cpu_info: &[],
+            memory_info: &[],
             tabs: &tabs,
             connection_status: &statuses,
             host_probes: probes,
             series,
             state,
             now_unix: 1_000_750,
+            interval_secs: 3,
         };
         let mut buf = Vec::new();
         render_consolidated_tab(&mut buf, &inputs, cols, rows);
@@ -789,10 +649,10 @@ mod tests {
         let out = render(160, 40, &[], &ConsolidatedState::default());
         assert!(out.contains("3 accelerators on 2 hosts (2 up)"), "{out}");
         assert!(out.contains("ians-Mac-Studio"));
-        assert!(out.contains("M5 Ultra GPU (80 cores)"));
+        assert!(out.contains("Apple M5 Ultra · 80-core GPU"), "{out}");
         assert!(out.contains("154.0/256.0 GiB unified"));
         assert!(out.contains("87.0/96.0 GiB VRAM"));
-        assert!(out.contains("RTX PRO 6000 Blackwell #1"));
+        assert!(out.contains("NVIDIA RTX PRO 6000 Blackwell #1"), "{out}");
         assert!(out.contains("100/600 W"));
         assert!(out.contains("└ ANE 1.5 W"));
         assert!(out.contains("328.0/448.0 GiB 73%"), "{out}");
@@ -856,12 +716,14 @@ mod tests {
         let inputs = ConsolidatedInputs {
             gpu_info: &gpus,
             cpu_info: &[],
+            memory_info: &[],
             tabs: &tabs,
             connection_status: &statuses,
             host_probes: &[],
             series: &SeriesHistory::default(),
             state: &state,
             now_unix: 0,
+            interval_secs: 3,
         };
         let mut buf = Vec::new();
         render_consolidated_tab(&mut buf, &inputs, 160, 40);
@@ -871,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_panel_renders_engine_swap_lock_and_link() {
+    fn pipeline_panel_renders_diagram_engine_swap_lock_and_link() {
         use crate::ui::consolidated::pipeline::{
             EngineCache, EngineHealth, PipelineConfig, PipelineStatus, Probe, SwapModel,
         };
@@ -880,7 +742,7 @@ mod tests {
             ok: Some(true),
             sessions: Some(2),
             connections: Some(1),
-            gpu_job: Some(serde_json::Value::String("prefill".to_string())),
+            gpu_job: Some(serde_json::Value::String("prefill_chunk".to_string())),
             gpu_job_s: Some(1.25),
             queued_jobs: Some(3),
             version: Some("d11dccf".to_string()),
@@ -894,32 +756,54 @@ mod tests {
             }),
             ..Default::default()
         });
+        status.prefill_elapsed = Some(std::time::Duration::from_secs(8));
         status.swap = Probe::Ok(vec![SwapModel {
             model: "ds41".to_string(),
             state: "ready".to_string(),
-            name: "Icculis".to_string(),
+            name: "Icculus".to_string(),
         }]);
         let state = ConsolidatedState {
             pipeline: Some(status),
             ..Default::default()
         };
         let out = render(160, 60, &probes(), &state);
-        assert!(out.contains("── Icculis pipeline"), "{out}");
+        assert!(
+            out.contains("Icculis · DeepSeek-V4.1-Flash · original weights"),
+            "{out}"
+        );
+        assert!(
+            out.contains("engine ok · d11dccf · og-s4.3 · up 1h 10m"),
+            "{out}"
+        );
+        assert!(out.contains("╭ RTX box · vllm"), "{out}");
+        assert!(out.contains("╭ M5 Ultra · ians-Mac-Studio"), "{out}");
+        assert!(out.contains("layers 0-19"), "{out}");
+        assert!(out.contains("● PREFILL  8s · prefill_chunk 1.2s"), "{out}");
+        assert!(out.contains("prefill state ▶"), "{out}");
         assert!(out.contains("vllm :10051"), "{out}");
-        assert!(out.contains("ok · d11dccf · og-s4.3 · up 1h 10m"), "{out}");
-        assert!(out.contains("sessions 2 · connections 1 · gpu busy: prefill 1.2s · queue 3"));
-        assert!(out.contains("prefix cache 301/406 hits (74.1%) · 777 entries"));
+        assert!(
+            out.contains("sessions 2 · connections 1 · queue 3"),
+            "{out}"
+        );
+        assert!(out.contains("prefix cache 74% of 406 lookups"), "{out}");
         assert!(out.contains("ians-Mac-Studio :8080"), "{out}");
-        assert!(out.contains("ds41 ready  Icculis"));
+        assert!(out.contains("ds41 ready  Icculus"));
         assert!(out.contains("held by omlx-server"));
         assert!(out.contains("1.25 GB/s"));
+        for line in out.split("\r\n") {
+            assert!(display_width(line) <= 160, "{line:?}");
+        }
 
         let mut down = state.clone();
         let p = down.pipeline.as_mut().unwrap();
         p.engine = Probe::Err("connection failed".to_string());
         p.swap = Probe::Pending;
         let out = render(160, 60, &[], &down);
-        assert!(out.contains("unreachable: connection failed"));
+        assert!(
+            out.contains("engine unreachable: connection failed"),
+            "{out}"
+        );
+        assert!(out.contains("DOWN"), "{out}");
         assert!(out.contains("waiting for the first /running poll"));
     }
 
@@ -941,22 +825,8 @@ mod tests {
     }
 
     #[test]
-    fn formats() {
-        assert_eq!(fmt_watts(0.02), "0.02 W");
-        assert_eq!(fmt_watts(92.4), "92.4 W");
-        assert_eq!(fmt_watts(188.6), "189 W");
-        assert_eq!(fmt_rate(None), "n/a");
-        assert_eq!(fmt_rate(Some(999.0)), "999 B/s");
-        assert_eq!(fmt_duration(59), "59s");
-        assert_eq!(fmt_duration(3599), "59m 59s");
-        assert_eq!(fmt_duration(3 * 3600 + 5 * 60), "3h 05m");
-        assert_eq!(fmt_duration(2 * 86400 + 4 * 3600), "2d 04h");
+    fn paths() {
         assert_eq!(tilde_home("/home/ian/x.lock"), "~/x.lock");
-        assert_eq!(
-            fit_keeping_index("RTX PRO 6000 Blackwell #1", 19),
-            "RTX PRO 6000 Bla #1"
-        );
-        assert_eq!(fit_keeping_index("M5 Ultra GPU", 19), "M5 Ultra GPU");
         assert_eq!(tilde_home("/var/lock/x"), "/var/lock/x");
     }
 }
