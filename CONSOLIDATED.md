@@ -260,7 +260,7 @@ its GPU load and lock holder instead of the ds41 step rate):
  RTX box L0-19  ○ idle   ── 41.1 KB/s ▶ ──   M5 Ultra L20-39 + head + draft  ○ idle  not serving
 ```
 
-With ds41 serving, the Mac half reads `● DECODE  ≈63 tok/s · 31 steps/s`
+With ds41 serving, the Mac half reads, for example, `● DECODE  ≈63 tok/s · 31 steps/s`
 while decoding and `○ waiting  for the prefill state` while the box
 prefills, and the link column of the diagram reads `prefill state ▶` or
 `◀ decode steps ▶`.
