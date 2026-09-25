@@ -21,6 +21,7 @@ use crate::device::{
     ChassisInfo, CpuInfo, GpuInfo, MemoryInfo, MigGpuInfo, ProcessInfo, VgpuHostInfo,
 };
 use crate::network::metrics_parser::ParsedProcessRow;
+use crate::probes::HostProbes;
 use crate::storage::info::StorageInfo;
 
 /// Result type for data collection operations
@@ -45,6 +46,9 @@ pub struct CollectionData {
     /// started with `--processes`; always empty in local mode
     /// (local-mode process data lives in `process_info` instead).
     pub remote_process_info: Vec<ParsedProcessRow>,
+    /// Opt-in host probes parsed from remote exporters. Always empty in
+    /// local and SSH mode.
+    pub host_probes: Vec<HostProbes>,
 }
 
 impl CollectionData {
@@ -60,6 +64,7 @@ impl CollectionData {
             mig_info: Vec::new(),
             connection_statuses: Vec::new(),
             remote_process_info: Vec::new(),
+            host_probes: Vec::new(),
         }
     }
 }

@@ -175,6 +175,7 @@ impl SshStrategy {
             mig_info: Vec::new(),
             connection_statuses,
             remote_process_info: Vec::new(),
+            host_probes: Vec::new(),
         }
     }
 }

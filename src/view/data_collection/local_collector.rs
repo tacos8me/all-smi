@@ -634,6 +634,7 @@ impl LocalCollector {
             connection_statuses: Vec::new(),
             // Local mode has no cluster-wide Users tab (issue #189).
             remote_process_info: Vec::new(),
+            host_probes: Vec::new(),
         }
     }
 
@@ -778,6 +779,7 @@ impl LocalCollector {
             connection_statuses: Vec::new(),
             // Local mode has no cluster-wide Users tab (issue #189).
             remote_process_info: Vec::new(),
+            host_probes: Vec::new(),
         }
     }
 

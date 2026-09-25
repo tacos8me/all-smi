@@ -15,6 +15,7 @@
 pub mod client;
 pub mod metrics_parser;
 pub mod nvidia_smi_shim;
+pub mod probe_parser;
 pub mod rocm_smi_shim;
 pub mod ssh_client;
 pub mod ssh_decision;

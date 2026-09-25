@@ -208,6 +208,7 @@ impl DataCollectionStrategy for RemoteCollector {
             mig_info,
             remote_process_info,
             connection_statuses,
+            host_probes,
         ) = self
             .network_client
             .fetch_remote_data(&config.hosts, &self.semaphore, &self.regex)
@@ -229,6 +230,7 @@ impl DataCollectionStrategy for RemoteCollector {
             mig_info,
             connection_statuses,
             remote_process_info,
+            host_probes,
         })
     }
 
@@ -255,6 +257,7 @@ impl DataCollectionStrategy for RemoteCollector {
         state.vgpu_info = data.vgpu_info;
         state.mig_info = data.mig_info;
         state.remote_process_info = data.remote_process_info;
+        state.host_probes = data.host_probes;
 
         // Update connection status and maintain known hosts
         Self::update_connection_status(&mut state, data.connection_statuses, &config.hosts);

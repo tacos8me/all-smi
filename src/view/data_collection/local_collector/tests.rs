@@ -311,6 +311,7 @@ async fn collect_reference(collector: &LocalCollector) -> CollectionData {
         mig_info: all_mig_info,
         connection_statuses: Vec::new(),
         remote_process_info: Vec::new(),
+        host_probes: Vec::new(),
     }
 }
 

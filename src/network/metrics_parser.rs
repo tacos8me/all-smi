@@ -41,6 +41,10 @@ pub struct ParsedMetrics {
     /// and consumed by the cluster-wide Users tab aggregator (issue #189).
     /// Empty when the scraped host was not started with `--processes`.
     pub process_info: Vec<ParsedProcessRow>,
+    /// Opt-in host probe series (`all_smi_network_*`, `all_smi_lock_*`).
+    /// `None` when the scraped exporter was started without
+    /// `--net-iface` / `--watch-lock`.
+    pub host_probes: Option<crate::probes::HostProbes>,
 }
 
 /// One row emitted by the remote metrics parser for each `(host, pid,
@@ -148,6 +152,7 @@ impl MetricsParser {
         let mut process_info_map: HashMap<(u32, u32), ParsedProcessRow> =
             HashMap::with_capacity(32);
         let mut host_instance_name: Option<String> = None;
+        let mut probe_state = super::probe_parser::ProbeParseState::default();
 
         for line in text.lines() {
             if let Some((metric_name, labels_str, value)) = parse_prometheus!(line, re) {
@@ -224,6 +229,8 @@ impl MetricsParser {
                         value,
                         host,
                     );
+                } else if super::probe_parser::is_probe_metric(&metric_name) {
+                    probe_state.process(&metric_name, &labels, value);
                 } else if metric_name.starts_with("process_") {
                     // Cap process rows to keep a pathological scrape from
                     // turning into an OOM — 50 k rows is two orders of
@@ -262,6 +269,7 @@ impl MetricsParser {
             vgpu_info: vgpu_state.finish(),
             mig_info: mig_state.finish(),
             process_info: process_info_map.into_values().collect(),
+            host_probes: probe_state.finish(host),
         }
     }
 
