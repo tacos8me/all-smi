@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd user agent for the Mac half of the consolidated view (no sudo).
+
+    cp com.tacos8me.all-smi-api.plist ~/Library/LaunchAgents/
+    launchctl bootstrap user/$(id -u) ~/Library/LaunchAgents/com.tacos8me.all-smi-api.plist
+
+  (`gui/<uid>` instead of `user/<uid>` when someone is logged in at the
+  console.) A user agent starts with a login session; to start at boot
+  on a Mac nobody logs in to, install the same plist once as a
+  LaunchDaemon with a UserName key (needs sudo).
+
+  Sudoless IOReport/SMC metrics at a 3 s cadence, listening only on the
+  direct link and loopback, plus the link interface's byte counters and
+  the GPU lock holder (found with lsof; the lock is never taken). Paths
+  are absolute because launchd does not expand `~`.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.tacos8me.all-smi-api</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/ian/.local/bin/all-smi</string>
+		<string>api</string>
+		<string>--port</string>
+		<string>9090</string>
+		<string>--bind</string>
+		<string>10.10.10.2,127.0.0.1</string>
+		<string>--interval</string>
+		<string>3</string>
+		<string>--net-iface</string>
+		<string>en0</string>
+		<string>--watch-lock</string>
+		<string>/Users/ian/llm/locks/gpu.lock</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- The API logs every HTTP request at debug level by default. -->
+		<key>RUST_LOG</key>
+		<string>warn</string>
+	</dict>
+	<!-- Load at a GUI login and in the per-user background session (the
+	     one `launchctl bootstrap user/<uid>` and SSH logins use), so the
+	     agent also works on a headless Mac nobody logs in to. -->
+	<key>LimitLoadToSessionType</key>
+	<array>
+		<string>Aqua</string>
+		<string>Background</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- Restart after any exit, e.g. the link address not being up yet. -->
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/Users/ian/Library/Logs/all-smi-api.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/ian/Library/Logs/all-smi-api.log</string>
+</dict>
+</plist>

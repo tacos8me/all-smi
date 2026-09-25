@@ -1,0 +1,27 @@
+# systemd *user* unit for the RTX box half of the consolidated view.
+#
+#   install -Dm644 all-smi-api.service ~/.config/systemd/user/all-smi-api.service
+#   systemctl --user daemon-reload && systemctl --user enable --now all-smi-api
+#
+# Read-only NVML at a 3 s cadence, listening only on the direct link and
+# loopback, with the link interface's byte counters exported for the
+# viewer's LINK rows. Needs `loginctl enable-linger` to start at boot.
+[Unit]
+Description=all-smi API exporter (consolidated view, RTX box)
+Documentation=https://github.com/tacos8me/all-smi/blob/consolidated/CONSOLIDATED.md
+
+[Service]
+Type=exec
+ExecStart=%h/.local/bin/all-smi api --port 9090 --bind 10.10.10.1,127.0.0.1 --interval 3 --net-iface enp161s0f0np0
+# The API logs every HTTP request at debug level by default.
+Environment=RUST_LOG=warn
+# The link address may come up after the user manager; keep retrying.
+Restart=always
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=25%
+MemoryMax=256M
+
+[Install]
+WantedBy=default.target
