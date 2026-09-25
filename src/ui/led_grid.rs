@@ -72,16 +72,13 @@ pub fn render_led_grid_lines(state: &AppState, grid_width: usize, max_rows: usiz
         return Vec::new();
     }
 
-    // Collect nodes: skip "All" and the cluster-wide Users tab (issue
-    // #189).  After those synthetic tabs the remainder are remote host
-    // addresses.
+    // Collect nodes: skip every cluster-level tab ("All", Users,
+    // Topology, ...). The remainder are remote host addresses.
     let nodes: Vec<(usize, &String)> = state
         .tabs
         .iter()
         .enumerate()
-        .filter(|(_, name)| {
-            name.as_str() != "All" && name.as_str() != crate::ui::tabs::USERS_TAB_NAME
-        })
+        .filter(|(_, name)| !crate::ui::tabs::is_reserved_tab(name))
         .collect();
     if nodes.is_empty() {
         return Vec::new();
@@ -290,6 +287,26 @@ mod tests {
         state.tabs = vec!["All".to_string()];
         let lines = render_led_grid_lines(&state, 20, 4);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_led_grid_skips_reserved_tabs() {
+        let mut state = make_remote_state(2);
+        state
+            .tabs
+            .insert(1, crate::ui::tabs::USERS_TAB_NAME.to_string());
+        state
+            .tabs
+            .insert(2, crate::ui::tabs::TOPOLOGY_TAB_NAME.to_string());
+        let lines = render_led_grid_lines(&state, 20, 4);
+        assert_eq!(lines.len(), 1);
+        // One LED per host; the cluster-level tabs are not nodes.
+        assert_eq!(
+            lines[0]
+                .matches(['\u{25CF}', '\u{25CB}', '\u{2297}'])
+                .count(),
+            2
+        );
     }
 
     #[test]
