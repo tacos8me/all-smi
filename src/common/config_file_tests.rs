@@ -386,6 +386,23 @@ fn api_socket_as_bool_and_path() {
 }
 
 #[test]
+fn api_bind_addresses_parse_and_reject_garbage() {
+    let _guard = crate::common::test_env::lock_env();
+    clear_env();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[api]\nbind = [\"10.10.10.2\", \"127.0.0.1\"]\n").unwrap();
+    let outcome = load(Some(&path)).expect("must load");
+    let expected: Vec<std::net::IpAddr> =
+        vec!["10.10.10.2".parse().unwrap(), "127.0.0.1".parse().unwrap()];
+    assert_eq!(outcome.settings.api.bind, expected);
+    assert!(outcome.settings.unknown_keys.is_empty());
+
+    std::fs::write(&path, "[api]\nbind = [\"not-an-ip\"]\n").unwrap();
+    assert!(matches!(load(Some(&path)), Err(ConfigError::Semantic(_))));
+}
+
+#[test]
 fn malformed_toml_returns_parse_error() {
     let _guard = crate::common::test_env::lock_env();
     clear_env();

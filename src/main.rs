@@ -314,6 +314,9 @@ async fn run_command(cli: Cli, settings: Settings) {
             if args.processes.is_none() {
                 args.processes = Some(settings.api.processes);
             }
+            if args.bind.is_empty() {
+                args.bind = settings.api.bind.clone();
+            }
             #[cfg(unix)]
             {
                 if args.socket.is_none() {
@@ -663,6 +666,7 @@ async fn run_command(cli: Cli, settings: Settings) {
                         processes: None,
                         #[cfg(unix)]
                         socket: None,
+                        bind: Vec::new(),
                     };
                     return Box::pin(run_command(
                         Cli {

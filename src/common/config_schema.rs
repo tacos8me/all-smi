@@ -94,6 +94,8 @@ pub struct ApiSection {
     pub socket: SocketSetting,
     pub processes: Option<bool>,
     pub interval_secs: Option<u64>,
+    /// TCP listener addresses (`bind = ["10.0.0.1", "127.0.0.1"]`).
+    pub bind: Option<Vec<String>>,
 }
 
 /// Tri-state representation of `[api].socket`.

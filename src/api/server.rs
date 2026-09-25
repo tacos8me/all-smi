@@ -14,6 +14,7 @@
 
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::{Router, routing::get};
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -263,7 +264,7 @@ pub async fn run_api_mode(args: &ApiArgs, settings: &Settings) {
         match (port, socket_path) {
             // Both TCP and UDS (port > 0 with socket)
             (1..=u16::MAX, Some(path)) => {
-                run_dual_listeners(app, port, path).await;
+                run_dual_listeners(app, port, &args.bind, path).await;
             }
             // UDS only (port == 0 with socket)
             (0, Some(path)) => {
@@ -271,7 +272,7 @@ pub async fn run_api_mode(args: &ApiArgs, settings: &Settings) {
             }
             // TCP only (port > 0, no socket)
             (1..=u16::MAX, None) => {
-                run_tcp_listener(app, port).await;
+                run_tcp_listener(app, port, &args.bind).await;
             }
             // No listeners - error (port == 0, no socket)
             (0, None) => {
@@ -287,7 +288,7 @@ pub async fn run_api_mode(args: &ApiArgs, settings: &Settings) {
 
     #[cfg(not(unix))]
     {
-        run_tcp_listener(app, args.port.unwrap_or(9090)).await;
+        run_tcp_listener(app, args.port.unwrap_or(9090), &args.bind).await;
     }
 
     // Signal the WAL flush task to perform a final flush and fsync
@@ -299,29 +300,67 @@ pub async fn run_api_mode(args: &ApiArgs, settings: &Settings) {
     }
 }
 
-/// Run only the TCP listener
-async fn run_tcp_listener(app: Router, port: u16) {
-    let listener = match TcpListener::bind(&format!("0.0.0.0:{port}")).await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("Failed to bind TCP listener on port {port}: {e}");
-            eprintln!("Error: Failed to bind TCP listener on port {port}: {e}");
-            return;
-        }
+/// Bind one TCP listener per requested address on `port`, or a single
+/// wildcard (`0.0.0.0`) listener when no address was requested. Returns
+/// `None` after reporting the error when any address fails to bind, so a
+/// typo in `--bind` never leaves the exporter half-listening.
+async fn bind_tcp_listeners(port: u16, binds: &[IpAddr]) -> Option<Vec<TcpListener>> {
+    let addrs: Vec<SocketAddr> = if binds.is_empty() {
+        vec![SocketAddr::from(([0, 0, 0, 0], port))]
+    } else {
+        binds.iter().map(|ip| SocketAddr::new(*ip, port)).collect()
     };
-    tracing::info!(
-        "API server listening on {}",
-        listener
-            .local_addr()
-            .unwrap_or_else(|_| "unknown".parse().unwrap())
-    );
-    mark_serving();
-    if let Err(e) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-    {
-        tracing::error!("TCP server error: {e}");
+    let mut listeners = Vec::with_capacity(addrs.len());
+    for addr in addrs {
+        match TcpListener::bind(addr).await {
+            Ok(l) => listeners.push(l),
+            Err(e) => {
+                tracing::error!("Failed to bind TCP listener on {addr}: {e}");
+                eprintln!("Error: Failed to bind TCP listener on {addr}: {e}");
+                return None;
+            }
+        }
     }
+    Some(listeners)
+}
+
+/// Human-readable list of the addresses the listeners actually bound.
+fn describe_listeners(listeners: &[TcpListener]) -> String {
+    listeners
+        .iter()
+        .map(|l| {
+            l.local_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|_| "unknown".to_string())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Serve `app` on every TCP listener until the shutdown signal fires.
+async fn serve_tcp_listeners(app: Router, listeners: Vec<TcpListener>) {
+    let servers = listeners.into_iter().map(|listener| {
+        let app = app.clone();
+        async move {
+            if let Err(e) = axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+            {
+                tracing::error!("TCP server error: {e}");
+            }
+        }
+    });
+    futures_util::future::join_all(servers).await;
+}
+
+/// Run only the TCP listener(s)
+async fn run_tcp_listener(app: Router, port: u16, binds: &[IpAddr]) {
+    let Some(listeners) = bind_tcp_listeners(port, binds).await else {
+        return;
+    };
+    tracing::info!("API server listening on {}", describe_listeners(&listeners));
+    mark_serving();
+    serve_tcp_listeners(app, listeners).await;
 }
 
 /// Run only the Unix Domain Socket listener
@@ -383,7 +422,7 @@ async fn run_unix_listener(app: Router, path: PathBuf) {
 
 /// Run both TCP and Unix Domain Socket listeners simultaneously
 #[cfg(unix)]
-async fn run_dual_listeners(app: Router, port: u16, socket_path: PathBuf) {
+async fn run_dual_listeners(app: Router, port: u16, binds: &[IpAddr], socket_path: PathBuf) {
     // Remove stale socket file if it exists
     if let Err(e) = remove_stale_socket(&socket_path) {
         tracing::warn!("Failed to remove stale socket file: {e}");
@@ -405,14 +444,9 @@ async fn run_dual_listeners(app: Router, port: u16, socket_path: PathBuf) {
         return;
     }
 
-    // Create TCP listener
-    let tcp_listener = match TcpListener::bind(&format!("0.0.0.0:{port}")).await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("Failed to bind TCP listener on port {port}: {e}");
-            eprintln!("Error: Failed to bind TCP listener on port {port}: {e}");
-            return;
-        }
+    // Create TCP listener(s)
+    let Some(tcp_listeners) = bind_tcp_listeners(port, binds).await else {
+        return;
     };
 
     // Create Unix listener
@@ -438,9 +472,7 @@ async fn run_dual_listeners(app: Router, port: u16, socket_path: PathBuf) {
 
     tracing::info!(
         "API server listening on TCP {} and Unix socket {}",
-        tcp_listener
-            .local_addr()
-            .unwrap_or_else(|_| "unknown".parse().unwrap()),
+        describe_listeners(&tcp_listeners),
         socket_path.display()
     );
     mark_serving();
@@ -452,12 +484,7 @@ async fn run_dual_listeners(app: Router, port: u16, socket_path: PathBuf) {
     // shutdown listener so the select returns on SIGTERM / Ctrl+C and
     // the caller can run post-serve cleanup.
     tokio::select! {
-        result = axum::serve(tcp_listener, app)
-            .with_graceful_shutdown(shutdown_signal()) => {
-            if let Err(e) = result {
-                tracing::error!("TCP server error: {e}");
-            }
-        }
+        _ = serve_tcp_listeners(app, tcp_listeners) => {}
         result = axum::serve(unix_listener, app_clone)
             .with_graceful_shutdown(shutdown_signal()) => {
             if let Err(e) = result {

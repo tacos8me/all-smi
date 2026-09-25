@@ -198,6 +198,8 @@ pub struct ApiSettings {
     pub socket: SocketSetting,
     pub processes: bool,
     pub interval_secs: u64,
+    /// TCP listener addresses; empty means every interface.
+    pub bind: Vec<std::net::IpAddr>,
 }
 
 #[derive(Debug, Clone)]
@@ -249,6 +251,7 @@ impl Default for Settings {
                 socket: SocketSetting::Unset,
                 processes: false,
                 interval_secs: 3,
+                bind: Vec::new(),
             },
             alerts: AlertConfig::default(),
             energy: EnergyConfig::default(),
@@ -502,7 +505,7 @@ fn scan_unknown_subkeys(top: &toml::map::Map<String, TomlValue>, out: &mut BTree
     check("view", &["hostfile", "hosts", "interval_secs"], out, top);
     check(
         "api",
-        &["port", "socket", "processes", "interval_secs"],
+        &["port", "socket", "processes", "interval_secs", "bind"],
         out,
         top,
     );

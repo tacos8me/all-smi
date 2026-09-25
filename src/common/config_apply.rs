@@ -26,7 +26,7 @@ pub(super) fn apply_file(raw: &RawConfig, settings: &mut Settings) -> Result<(),
     apply_file_general(raw, settings)?;
     apply_file_local(raw, settings);
     apply_file_view(raw, settings);
-    apply_file_api(raw, settings);
+    apply_file_api(raw, settings)?;
     apply_file_alerts(raw, settings);
     apply_file_energy(raw, settings)?;
     apply_file_display(raw, settings);
@@ -118,8 +118,10 @@ fn apply_file_view(raw: &RawConfig, settings: &mut Settings) {
     }
 }
 
-fn apply_file_api(raw: &RawConfig, settings: &mut Settings) {
-    let Some(a) = &raw.api else { return };
+fn apply_file_api(raw: &RawConfig, settings: &mut Settings) -> Result<(), ConfigError> {
+    let Some(a) = &raw.api else {
+        return Ok(());
+    };
     if let Some(p) = a.port {
         settings.api.port = p;
     }
@@ -133,6 +135,19 @@ fn apply_file_api(raw: &RawConfig, settings: &mut Settings) {
     if let Some(i) = a.interval_secs {
         settings.api.interval_secs = i;
     }
+    if let Some(addrs) = &a.bind {
+        settings.api.bind = addrs
+            .iter()
+            .map(|addr| {
+                addr.trim().parse().map_err(|_| {
+                    ConfigError::Semantic(format!(
+                        "api.bind entries must be IP addresses, got `{addr}`"
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+    }
+    Ok(())
 }
 
 fn apply_file_alerts(raw: &RawConfig, settings: &mut Settings) {

@@ -144,6 +144,14 @@ pub struct ApiArgs {
     #[cfg(unix)]
     #[arg(short, long, num_args = 0..=1, default_missing_value = "")]
     pub socket: Option<String>,
+    /// Addresses the TCP listener binds to, space- or comma-separated
+    /// (e.g. `--bind 10.10.10.2,127.0.0.1`). One listener is opened per
+    /// address on `--port`.
+    ///
+    /// When omitted, value is taken from `[api].bind` in the config file,
+    /// or the listener binds every interface (`0.0.0.0`).
+    #[arg(long, num_args = 1.., value_delimiter = ',')]
+    pub bind: Vec<std::net::IpAddr>,
 }
 
 #[derive(Parser, Clone)]

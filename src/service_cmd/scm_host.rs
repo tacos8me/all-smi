@@ -273,6 +273,7 @@ fn api_args(settings: &Settings) -> ApiArgs {
         port: Some(settings.api.port),
         interval: Some(settings.api.interval_secs),
         processes: Some(settings.api.processes),
+        bind: settings.api.bind.clone(),
     }
 }
 
