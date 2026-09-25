@@ -170,6 +170,15 @@ fn apply_file_api(raw: &RawConfig, settings: &mut Settings) -> Result<(), Config
     if let Some(locks) = &a.watch_locks {
         settings.api.watch_locks = locks.clone();
     }
+    if let Some(probes) = &a.json_probes {
+        settings.api.json_probes = probes
+            .iter()
+            .map(|p| {
+                p.parse()
+                    .map_err(|e: String| ConfigError::Semantic(format!("api.json_probes: {e}")))
+            })
+            .collect::<Result<_, _>>()?;
+    }
     Ok(())
 }
 

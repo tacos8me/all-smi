@@ -165,6 +165,13 @@ pub struct ApiArgs {
     /// is never taken. Repeatable. Falls back to `[api].watch_locks`.
     #[arg(long = "watch-lock", num_args = 1..)]
     pub watch_lock: Vec<PathBuf>,
+    /// Export the numeric fields (and their per-second rates) of a
+    /// loopback JSON status endpoint (`all_smi_json_probe_*`), e.g.
+    /// `--json-probe og=http://127.0.0.1:10001/og/stats`. One plain
+    /// `GET` per collection cycle; `http://` only. Repeatable. Falls back
+    /// to `[api].json_probes`.
+    #[arg(long = "json-probe", value_name = "NAME=URL", num_args = 1..)]
+    pub json_probe: Vec<crate::probes::JsonProbeSpec>,
 }
 
 #[derive(Parser, Clone)]

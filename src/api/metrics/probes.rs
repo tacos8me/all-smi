@@ -13,8 +13,8 @@
 // limitations under the License.
 
 //! Prometheus families for the opt-in host probes (`--net-iface`,
-//! `--watch-lock`). Emits nothing when no probe is configured, so a stock
-//! exporter's `/metrics` output is unchanged.
+//! `--watch-lock`, `--json-probe`). Emits nothing when no probe is
+//! configured, so a stock exporter's `/metrics` output is unchanged.
 
 use super::{MetricBuilder, MetricExporter};
 use crate::probes::HostProbes;
@@ -26,6 +26,9 @@ pub const NET_TX_RATE: &str = "all_smi_network_transmit_bytes_per_second";
 pub const LOCK_HELD: &str = "all_smi_lock_held";
 pub const LOCK_HOLDER_INFO: &str = "all_smi_lock_holder_info";
 pub const LOCK_HELD_SINCE: &str = "all_smi_lock_held_since_seconds";
+pub const JSON_UP: &str = "all_smi_json_probe_up";
+pub const JSON_VALUE: &str = "all_smi_json_probe_value";
+pub const JSON_RATE: &str = "all_smi_json_probe_rate";
 
 pub struct ProbeMetricExporter<'a> {
     probes: &'a [HostProbes],
@@ -154,11 +157,64 @@ impl<'a> ProbeMetricExporter<'a> {
     }
 }
 
+impl ProbeMetricExporter<'_> {
+    fn export_json(&self, builder: &mut MetricBuilder) {
+        if self.probes.iter().all(|p| p.json.is_empty()) {
+            return;
+        }
+        builder
+            .help(
+                JSON_UP,
+                "1 when the JSON status endpoint answered 2xx with an object",
+            )
+            .type_(JSON_UP, "gauge");
+        for host in self.probes {
+            for probe in &host.json {
+                let labels = [
+                    ("instance", host.instance.as_str()),
+                    ("hostname", host.hostname.as_str()),
+                    ("probe", probe.name.as_str()),
+                ];
+                builder.metric(JSON_UP, &labels, u8::from(probe.up));
+            }
+        }
+        for (name, help, rates) in [
+            (
+                JSON_VALUE,
+                "Numeric field of the JSON status endpoint",
+                false,
+            ),
+            (
+                JSON_RATE,
+                "Per-second change of the field since the previous collection",
+                true,
+            ),
+        ] {
+            builder.help(name, help).type_(name, "gauge");
+            for host in self.probes {
+                for probe in &host.json {
+                    let fields = if rates { &probe.rates } else { &probe.values };
+                    for (key, value) in fields {
+                        let labels = [
+                            ("instance", host.instance.as_str()),
+                            ("hostname", host.hostname.as_str()),
+                            ("probe", probe.name.as_str()),
+                            ("key", key.as_str()),
+                        ];
+                        builder.metric(name, &labels, value);
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl MetricExporter for ProbeMetricExporter<'_> {
     fn export_metrics(&self) -> String {
         let mut builder = MetricBuilder::new();
         self.export_network(&mut builder);
         self.export_locks(&mut builder);
+        self.export_json(&mut builder);
         builder.build()
     }
 }
@@ -196,6 +252,13 @@ mod tests {
                     since_unix: None,
                 },
             ],
+            json: vec![crate::probes::JsonProbeSample {
+                name: "og".to_string(),
+                up: true,
+                values: [("steps".to_string(), 102.0), ("box_s".to_string(), 0.5)].into(),
+                rates: [("steps".to_string(), 31.5)].into(),
+            }],
+            os: None,
         }
     }
 
@@ -230,6 +293,15 @@ mod tests {
         assert!(out.contains("pid=\"42\", command=\"omlx-server\"} 1\n"));
         assert!(out.contains(
             "all_smi_lock_held_since_seconds{instance=\"mac\", hostname=\"mac\", path=\"/locks/gpu.lock\"} 1700000000\n"
+        ));
+        assert!(out.contains(
+            "all_smi_json_probe_up{instance=\"mac\", hostname=\"mac\", probe=\"og\"} 1\n"
+        ));
+        assert!(out.contains(
+            "all_smi_json_probe_value{instance=\"mac\", hostname=\"mac\", probe=\"og\", key=\"steps\"} 102\n"
+        ));
+        assert!(out.contains(
+            "all_smi_json_probe_rate{instance=\"mac\", hostname=\"mac\", probe=\"og\", key=\"steps\"} 31.5\n"
         ));
     }
 }

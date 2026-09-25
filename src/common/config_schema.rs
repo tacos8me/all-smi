@@ -102,6 +102,8 @@ pub struct ApiSection {
     pub net_interfaces: Option<Vec<String>>,
     /// Lock files whose holders are exported.
     pub watch_locks: Option<Vec<String>>,
+    /// JSON status endpoints, as `NAME=URL` strings.
+    pub json_probes: Option<Vec<String>>,
 }
 
 /// Tri-state representation of `[api].socket`.

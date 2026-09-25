@@ -14,22 +14,27 @@
 
 //! Host-level probes exported next to the device metrics.
 //!
-//! Two opt-in probes, both read-only:
+//! Three opt-in probes, all read-only:
 //!
 //! * [`net`]: cumulative byte counters (and the rate since the previous
 //!   cycle) for named network interfaces, e.g. a direct link between two
 //!   machines that serve one model together.
 //! * [`lock`]: which processes hold a named lock file open, found with
 //!   `lsof`, so the lock itself is never touched.
+//! * [`json`]: numeric fields (and their rates) of a loopback JSON status
+//!   endpoint, e.g. a model server's `/health`.
 //!
-//! `all-smi api --net-iface <IF> --watch-lock <PATH>` enables them; the
-//! remote viewer parses the resulting series back into [`HostProbes`].
+//! `all-smi api --net-iface <IF> --watch-lock <PATH> --json-probe NAME=URL`
+//! enables them; the remote viewer parses the resulting series back into
+//! [`HostProbes`].
 
+pub mod json;
 pub mod lock;
 pub mod net;
 
 use std::path::PathBuf;
 
+pub use json::{JsonProbeSample, JsonProbeSpec, JsonProber};
 pub use lock::{LockSample, LockWatcher};
 pub use net::{NetInterfaceSample, NetSampler};
 
@@ -42,11 +47,19 @@ pub struct HostProbes {
     pub instance: String,
     pub interfaces: Vec<NetInterfaceSample>,
     pub locks: Vec<LockSample>,
+    pub json: Vec<JsonProbeSample>,
+    /// Exporter OS from `all_smi_build_info` (viewer side only).
+    pub os: Option<String>,
 }
 
 impl HostProbes {
     pub fn is_empty(&self) -> bool {
-        self.interfaces.is_empty() && self.locks.is_empty()
+        self.interfaces.is_empty() && self.locks.is_empty() && self.json.is_empty()
+    }
+
+    /// The JSON probe exported under `name`, if any.
+    pub fn json_probe(&self, name: &str) -> Option<&JsonProbeSample> {
+        self.json.iter().find(|p| p.name == name)
     }
 }
 
@@ -55,18 +68,24 @@ impl HostProbes {
 pub struct ProbeSampler {
     net: Option<NetSampler>,
     locks: Option<LockWatcher>,
+    json: Option<JsonProber>,
 }
 
 impl ProbeSampler {
     /// Returns `None` when no probe was requested, so callers skip the
     /// whole probe path on a stock exporter.
-    pub fn new(interfaces: Vec<String>, lock_paths: Vec<PathBuf>) -> Option<Self> {
-        if interfaces.is_empty() && lock_paths.is_empty() {
+    pub fn new(
+        interfaces: Vec<String>,
+        lock_paths: Vec<PathBuf>,
+        json_probes: Vec<JsonProbeSpec>,
+    ) -> Option<Self> {
+        if interfaces.is_empty() && lock_paths.is_empty() && json_probes.is_empty() {
             return None;
         }
         Some(Self {
             net: (!interfaces.is_empty()).then(|| NetSampler::new(interfaces)),
             locks: (!lock_paths.is_empty()).then(|| LockWatcher::new(lock_paths)),
+            json: (!json_probes.is_empty()).then(|| JsonProber::new(json_probes)),
         })
     }
 
@@ -85,6 +104,12 @@ impl ProbeSampler {
                 .as_mut()
                 .map(LockWatcher::sample)
                 .unwrap_or_default(),
+            json: self
+                .json
+                .as_mut()
+                .map(JsonProber::sample)
+                .unwrap_or_default(),
+            os: None,
         }
     }
 }
@@ -95,14 +120,18 @@ mod tests {
 
     #[test]
     fn sampler_is_absent_when_nothing_requested() {
-        assert!(ProbeSampler::new(Vec::new(), Vec::new()).is_none());
-        assert!(ProbeSampler::new(vec!["lo".to_string()], Vec::new()).is_some());
+        assert!(ProbeSampler::new(Vec::new(), Vec::new(), Vec::new()).is_none());
+        assert!(ProbeSampler::new(vec!["lo".to_string()], Vec::new(), Vec::new()).is_some());
     }
 
     #[test]
     fn sample_reports_requested_interface_even_when_missing() {
-        let mut sampler =
-            ProbeSampler::new(vec!["definitely-not-an-iface0".to_string()], Vec::new()).unwrap();
+        let mut sampler = ProbeSampler::new(
+            vec!["definitely-not-an-iface0".to_string()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
         let probes = sampler.sample("host-a");
         assert_eq!(probes.hostname, "host-a");
         // A missing interface is skipped rather than reported as zero.

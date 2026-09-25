@@ -13,13 +13,15 @@
 // limitations under the License.
 
 //! Viewer-side parser for the opt-in host probe families
-//! (`all_smi_network_*`, `all_smi_lock_*`) exported by
-//! [`crate::api::metrics::probes`]. Kept out of `metrics_parser.rs`, which
-//! only routes the lines here.
+//! (`all_smi_network_*`, `all_smi_lock_*`, `all_smi_json_probe_*`) exported
+//! by [`crate::api::metrics::probes`], plus the exporter's OS from
+//! `all_smi_build_info`. Kept out of `metrics_parser.rs`, which only routes
+//! the lines here.
 
 use std::collections::{BTreeMap, HashMap};
 
 use crate::probes::HostProbes;
+use crate::probes::json::{JsonProbeSample, MAX_FIELDS};
 use crate::probes::lock::{LockHolder, LockSample};
 use crate::probes::net::NetInterfaceSample;
 
@@ -28,10 +30,14 @@ use crate::probes::net::NetInterfaceSample;
 const MAX_INTERFACES: usize = 64;
 const MAX_LOCKS: usize = 64;
 const MAX_HOLDERS_PER_LOCK: usize = 16;
+const MAX_JSON_PROBES: usize = 16;
 
 /// True for metric names (without the `all_smi_` prefix) this parser owns.
 pub(crate) fn is_probe_metric(metric_name: &str) -> bool {
-    metric_name.starts_with("network_") || metric_name.starts_with("lock_")
+    metric_name.starts_with("network_")
+        || metric_name.starts_with("lock_")
+        || metric_name.starts_with("json_probe_")
+        || metric_name == "build_info"
 }
 
 #[derive(Default)]
@@ -40,6 +46,8 @@ pub(crate) struct ProbeParseState {
     instance: Option<String>,
     interfaces: BTreeMap<String, NetInterfaceSample>,
     locks: BTreeMap<String, LockSample>,
+    json: BTreeMap<String, JsonProbeSample>,
+    os: Option<String>,
 }
 
 impl ProbeParseState {
@@ -62,6 +70,39 @@ impl ProbeParseState {
             self.process_network(field, labels, value);
         } else if let Some(field) = metric_name.strip_prefix("lock_") {
             self.process_lock(field, labels, value);
+        } else if let Some(field) = metric_name.strip_prefix("json_probe_") {
+            self.process_json(field, labels, value);
+        } else if metric_name == "build_info" {
+            self.os = labels
+                .get("os")
+                .map(|os| os.chars().filter(|c| !c.is_control()).take(32).collect());
+        }
+    }
+
+    fn process_json(&mut self, field: &str, labels: &HashMap<String, String>, value: f64) {
+        let Some(name) = labels.get("probe").filter(|n| !n.is_empty()) else {
+            return;
+        };
+        if !self.json.contains_key(name) && self.json.len() >= MAX_JSON_PROBES {
+            return;
+        }
+        let probe = self
+            .json
+            .entry(name.clone())
+            .or_insert_with(|| JsonProbeSample {
+                name: name.clone(),
+                ..Default::default()
+            });
+        let key = labels.get("key").cloned().unwrap_or_default();
+        match field {
+            "up" => probe.up = value > 0.0,
+            "value" if !key.is_empty() && probe.values.len() < MAX_FIELDS => {
+                probe.values.insert(key, value);
+            }
+            "rate" if !key.is_empty() && probe.rates.len() < MAX_FIELDS => {
+                probe.rates.insert(key, value);
+            }
+            _ => {}
         }
     }
 
@@ -126,7 +167,11 @@ impl ProbeParseState {
 
     /// `None` when the scrape carried no probe series at all.
     pub(crate) fn finish(self, host: &str) -> Option<HostProbes> {
-        if self.interfaces.is_empty() && self.locks.is_empty() {
+        if self.interfaces.is_empty()
+            && self.locks.is_empty()
+            && self.json.is_empty()
+            && self.os.is_none()
+        {
             return None;
         }
         let hostname = self.hostname.unwrap_or_else(|| host.to_string());
@@ -136,6 +181,8 @@ impl ProbeParseState {
             hostname,
             interfaces: self.interfaces.into_values().collect(),
             locks: self.locks.into_values().collect(),
+            json: self.json.into_values().collect(),
+            os: self.os,
         })
     }
 }
@@ -146,6 +193,7 @@ mod tests {
     use crate::api::metrics::probes::ProbeMetricExporter;
     use crate::network::metrics_parser::MetricsParser;
     use crate::probes::HostProbes;
+    use crate::probes::json::JsonProbeSample;
     use crate::probes::lock::{LockHolder, LockSample};
     use crate::probes::net::NetInterfaceSample;
 
@@ -173,6 +221,13 @@ mod tests {
                 }],
                 since_unix: Some(1_790_370_904),
             }],
+            json: vec![JsonProbeSample {
+                name: "og".to_string(),
+                up: true,
+                values: [("steps".to_string(), 102.0), ("box_s".to_string(), 0.75)].into(),
+                rates: [("steps".to_string(), 31.5)].into(),
+            }],
+            os: None,
         }
     }
 
@@ -185,6 +240,16 @@ mod tests {
         assert_eq!(probes.hostname, "mac");
         assert_eq!(probes.interfaces, exported().interfaces);
         assert_eq!(probes.locks, exported().locks);
+        assert_eq!(probes.json, exported().json);
+    }
+
+    #[test]
+    fn build_info_carries_the_os() {
+        let text = "all_smi_build_info{instance=\"mac\", hostname=\"mac\", version=\"0.26.3\", os=\"macos\", arch=\"aarch64\"} 1\n";
+        let parsed = MetricsParser::new().parse_metrics(text, "h:9090", &regex());
+        let probes = parsed.host_probes.unwrap();
+        assert_eq!(probes.os.as_deref(), Some("macos"));
+        assert!(probes.is_empty());
     }
 
     #[test]

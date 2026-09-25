@@ -228,6 +228,7 @@ pub async fn run_api_mode(args: &ApiArgs, settings: &Settings) {
             .iter()
             .map(crate::common::paths::expand_tilde)
             .collect(),
+        args.json_probe.clone(),
     );
     tokio::spawn(run_collection_loop(
         state_clone.clone(),

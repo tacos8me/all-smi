@@ -329,6 +329,9 @@ async fn run_command(cli: Cli, settings: Settings) {
                     .map(std::path::PathBuf::from)
                     .collect();
             }
+            if args.json_probe.is_empty() {
+                args.json_probe = settings.api.json_probes.clone();
+            }
             #[cfg(unix)]
             {
                 if args.socket.is_none() {
@@ -690,6 +693,7 @@ async fn run_command(cli: Cli, settings: Settings) {
                         bind: Vec::new(),
                         net_iface: Vec::new(),
                         watch_lock: Vec::new(),
+                        json_probe: Vec::new(),
                     };
                     return Box::pin(run_command(
                         Cli {

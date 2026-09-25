@@ -205,6 +205,8 @@ pub struct ApiSettings {
     pub net_interfaces: Vec<String>,
     /// Lock files whose holders are exported (`--watch-lock`).
     pub watch_locks: Vec<String>,
+    /// JSON status endpoints whose fields are exported (`--json-probe`).
+    pub json_probes: Vec<crate::probes::JsonProbeSpec>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +271,7 @@ impl Default for Settings {
                 bind: Vec::new(),
                 net_interfaces: Vec::new(),
                 watch_locks: Vec::new(),
+                json_probes: Vec::new(),
             },
             alerts: AlertConfig::default(),
             energy: EnergyConfig::default(),
@@ -531,6 +534,7 @@ fn scan_unknown_subkeys(top: &toml::map::Map<String, TomlValue>, out: &mut BTree
             "bind",
             "net_interfaces",
             "watch_locks",
+            "json_probes",
         ],
         out,
         top,
