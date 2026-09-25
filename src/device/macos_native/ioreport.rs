@@ -130,8 +130,11 @@
 //! `(value - baseline) / (timestamp - baseline timestamp)`. It holds the
 //! previous reading while a channel has not published, folds publications
 //! under 50 ms into the next span, and drops a reading after 10 s without
-//! one. A channel whose elements carry no usable timestamp is timed by when
-//! each sample was taken, which is the old poll-window behavior.
+//! one, or after two of the channel's own spans when those are longer (a
+//! headless M5 Ultra publishes its mJ channels every 30 min, so its readings
+//! are half-hour averages). A channel whose elements carry no usable
+//! timestamp is timed by when each sample was taken, which is the old
+//! poll-window behavior.
 //!
 //! The timestamps have to be read from raw samples. In the output of
 //! `IOReportCreateSamplesDelta` an element's timestamp is the older sample's,

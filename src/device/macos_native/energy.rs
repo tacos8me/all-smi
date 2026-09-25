@@ -22,7 +22,7 @@
 //!
 //! ## Multi-die packages
 //!
-//! The one multi-die inventory recorded so far is an Apple M1 Ultra
+//! The first multi-die inventory recorded was an Apple M1 Ultra
 //! (Mac13,2, macOS 27.0, `tests/fixtures/ioreport/m1_ultra_energy_model.tsv`).
 //! Of its 321 channels, only CPU channels carry the `DIE_<n>_` prefix (34:
 //! clusters, per-core channels, `_CPM`, and one `DIE_<n>_CPU Energy` per
@@ -32,6 +32,13 @@
 //! to `GPU Energy`. No package `CPU Energy`, `ANE`, or `DRAM` sits beside the
 //! per-die channels, so summing `DIE_<n>_CPU Energy` and the `<block><n>_<m>`
 //! channels counts each die exactly once, which the rules below already do.
+//!
+//! An Apple M5 Ultra (Mac17,15, macOS 27.0,
+//! `tests/fixtures/ioreport/m5_ultra_energy_model.tsv`) has the same layout
+//! with M5 cluster names: 725 channels, 92 of them `DIE_<n>_` CPU channels
+//! ending in one `DIE_<n>_CPU Energy` per die, `ANE0_<m>` and `DRAM0_<m>`,
+//! one `GPU0_0` next to `GPU Energy`, and no package channel beside the
+//! per-die ones. The same eight channels classify.
 //!
 //! `DIE_<n>_` handling for GPU, ANE, and DRAM therefore stays as it is: no
 //! recorded chip has such a channel, so none classifies. A chip that adds one
@@ -76,8 +83,22 @@ use std::collections::HashMap;
 const MIN_PUBLICATION_SPAN_NS: u64 = 50_000_000;
 
 /// How long a channel may go without publishing before its held reading is
-/// dropped, in nanoseconds. Keeps a stalled provider from showing as live.
+/// dropped, in nanoseconds, unless its own publications are further apart
+/// (see [`HOLD_SPANS`]). Keeps a stalled provider from showing as live.
 const STALE_PUBLICATION_NS: u64 = 10_000_000_000;
+
+/// How many of a channel's own publication spans its reading is held for,
+/// when that is longer than [`STALE_PUBLICATION_NS`].
+///
+/// A headless M5 Ultra (Mac17,15, macOS 27.0) publishes its mJ channels once
+/// every 30 min: 1799.949 s apart, each about 100 ms after powerlog's
+/// half-hourly flush, where the M5 Max and M1 Ultra publish every 0.4 to
+/// 2.2 s. A fixed 10 s hold dropped each of those readings 10 s after it
+/// arrived, so the CPU, ANE, and DRAM rails read 0 W for all but 10 s of
+/// every half hour. Two spans hold a reading until the next publication is
+/// due, with one span to spare; M5 Max and M1 Ultra spans stay under the
+/// 10 s floor, so their readings still expire after 10 s.
+const HOLD_SPANS: u64 = 2;
 
 /// How far ahead of the observation time a driver timestamp may sit and still
 /// be trusted, in nanoseconds.
@@ -299,6 +320,9 @@ struct ChannelState {
     /// Watts over the most recent span. `None` until the first span closes,
     /// after a counter reset, and once the channel goes stale.
     watts: Option<f64>,
+    /// Length of the span `watts` was measured over, in nanoseconds. Sets how
+    /// long the reading is held (see [`HOLD_SPANS`]).
+    span_ns: Option<u64>,
     /// Timed by when samples were taken instead of by the driver's
     /// timestamps. Set once those timestamps prove unusable (missing, frozen
     /// while the value moves, or later than the observation), never cleared.
@@ -330,6 +354,7 @@ impl ChannelState {
             last_ns: published_ns,
             last_observed_ns: observed_at_ns,
             watts: None,
+            span_ns: None,
             observation_clock: usable_ts.is_none(),
             last_seen: sample,
         }
@@ -380,6 +405,7 @@ impl ChannelState {
             let counts = i128::from(obs.value) - i128::from(self.baseline_value);
             let joules = counts as f64 * joules_per_count(&obs.unit);
             self.watts = Some(joules / (span_ns as f64 / 1e9));
+            self.span_ns = Some(span_ns);
             self.baseline_value = obs.value;
             self.baseline_ns = published_ns;
         } else {
@@ -391,7 +417,10 @@ impl ChannelState {
             );
         }
 
-        if observed_at_ns.saturating_sub(published_ns) > STALE_PUBLICATION_NS {
+        let hold_ns = self.span_ns.map_or(STALE_PUBLICATION_NS, |span| {
+            STALE_PUBLICATION_NS.max(span.saturating_mul(HOLD_SPANS))
+        });
+        if observed_at_ns.saturating_sub(published_ns) > hold_ns {
             self.watts = None;
         }
     }
@@ -455,6 +484,10 @@ mod tests;
 #[cfg(test)]
 #[path = "energy/m1_ultra_tests.rs"]
 mod m1_ultra_tests;
+
+#[cfg(test)]
+#[path = "energy/m5_ultra_tests.rs"]
+mod m5_ultra_tests;
 
 #[cfg(test)]
 #[path = "energy/guard_tests.rs"]
