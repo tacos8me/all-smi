@@ -255,7 +255,7 @@ its GPU load and lock holder instead of the ds41 step rate):
 
 ```
  Icculis  DeepSeek-V4.1-Flash · original weights  ·  no model loaded
- RTX box  ● PREFILL ▶ M5 Ultra  ● BUSY
+ RTX box L0-19  ● PREFILL  6s · prefill_chunk 0.1s   ── 648 B/s ▶ ──   M5 Ultra L20-39 + head + draft  ○ idle  not serving
  RTX box L0-19  ● DECODE  verify step   ── 15.5 MB/s ◀▶ ──   M5 Ultra L20-39 + head + draft  ● BUSY  not serving · GPU 72% · lock: python (pid 19648)
  RTX box L0-19  ○ idle   ── 41.1 KB/s ▶ ──   M5 Ultra L20-39 + head + draft  ○ idle  not serving
 ```
