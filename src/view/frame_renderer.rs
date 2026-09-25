@@ -236,9 +236,15 @@ impl FrameRenderer {
             cluster::header::render_header(&mut buffer, &model, &title, cols);
             draw_tabs(&mut buffer, &view_state, cols);
 
-            // The All tab owns the rest of the frame: devices grouped by
-            // host, the Icculis strip, and the history panel.
-            if snapshot.current_tab == 0 {
+            // The All tab and the host tabs own the rest of the frame:
+            // devices grouped by host (details and disks on a host tab),
+            // the Icculis strip on the All tab, and the history panel.
+            let host_tab = snapshot
+                .tabs
+                .get(snapshot.current_tab)
+                .filter(|t| !crate::ui::tabs::is_reserved_tab(t))
+                .map(String::as_str);
+            if snapshot.current_tab == 0 || host_tab.is_some() {
                 let heading_rows = buffer.line_count() as u16;
                 let avail = rows.saturating_sub(heading_rows).saturating_sub(1).max(1);
                 let filtered_out: HashSet<String> = snapshot
@@ -262,6 +268,8 @@ impl FrameRenderer {
                     hide_filtered: snapshot.filter_hide_nonmatching,
                     interval_secs: history_interval(snapshot, args),
                     now_unix: chrono::Utc::now().timestamp().max(0) as u64,
+                    host: host_tab,
+                    storage: &snapshot.storage_info,
                 };
                 cluster::render_all_tab(&mut buffer, &inputs, cols, avail);
                 print_function_keys(&mut buffer, cols, rows, &view_state, is_remote);

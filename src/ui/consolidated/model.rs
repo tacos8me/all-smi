@@ -323,6 +323,20 @@ impl ConsolidatedModel {
         Self { hosts, totals }
     }
 
+    /// The same model narrowed to one host (a host tab). Totals stay
+    /// cluster-wide.
+    pub fn only_host(&self, host_id: &str) -> Self {
+        Self {
+            hosts: self
+                .hosts
+                .iter()
+                .filter(|h| h.host_id == host_id)
+                .cloned()
+                .collect(),
+            totals: self.totals.clone(),
+        }
+    }
+
     /// Display label for a host id, falling back to the id itself.
     pub fn host_label(&self, host_id: &str) -> String {
         self.hosts

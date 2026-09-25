@@ -30,7 +30,7 @@ use crate::ui::theme::{self, ACCENT, CRIT, MUTED, SUBTLE, TEXT};
 use super::line::{Line, Writer, fmt_gib_value, fmt_watts, plural};
 
 /// Narrowest stat block, gap included.
-const MIN_BLOCK: usize = 19;
+const MIN_BLOCK: usize = 17;
 /// Widest stat block; wider terminals leave the rest of the row empty.
 const MAX_BLOCK: usize = 30;
 /// Left margin of the overview.
@@ -88,13 +88,14 @@ pub fn render_header<W: Write>(
         cols,
         rows_left: usize::MAX,
     };
-    render_title(&mut w, title);
+    render_title(&mut w, model, title);
     w.blank();
     render_blocks(&mut w, &blocks(&model.totals, model));
     w.blank();
 }
 
-fn render_title<W: Write>(w: &mut Writer<'_, W>, info: &TitleInfo<'_>) {
+fn render_title<W: Write>(w: &mut Writer<'_, W>, model: &ConsolidatedModel, info: &TitleInfo<'_>) {
+    let t = &model.totals;
     let mut left = Line::default();
     left.text(" all-smi", ACCENT).text("  cluster", SUBTLE);
     if let Some(rt) = info.runtime {
@@ -102,6 +103,15 @@ fn render_title<W: Write>(w: &mut Writer<'_, W>, info: &TitleInfo<'_>) {
     }
     let mut right = Line::default();
     right
+        .text(
+            &format!("{} of {} hosts up", t.hosts_up, t.hosts_total),
+            if t.hosts_up < t.hosts_total {
+                CRIT
+            } else {
+                MUTED
+            },
+        )
+        .text("  ·  ", MUTED)
         .text(info.time, SUBTLE)
         .text("  ·  ", MUTED)
         .text(&format!("v{} ", info.version), MUTED);
@@ -125,16 +135,16 @@ fn blocks(t: &Totals, model: &ConsolidatedModel) -> Vec<Block> {
         .filter(|h| !h.connected)
         .map(|h| h.label.as_str())
         .collect();
-    out.push(Block {
-        label: "HOSTS",
-        value: format!("{} / {} up", t.hosts_up, t.hosts_total),
-        value_color: if down.is_empty() { TEXT } else { CRIT },
-        under: if down.is_empty() {
-            Under::Note("all reachable".to_string(), MUTED)
-        } else {
-            Under::Note(format!("down: {}", down.join(", ")), CRIT)
-        },
-    });
+    // The title counts the hosts; a block appears only to name the ones
+    // that are down.
+    if !down.is_empty() {
+        out.push(Block {
+            label: "HOSTS",
+            value: format!("{} / {} up", t.hosts_up, t.hosts_total),
+            value_color: CRIT,
+            under: Under::Note(format!("down: {}", down.join(", ")), CRIT),
+        });
+    }
 
     let discrete = t.devices - t.unified_devices;
     let mix = match (t.unified_devices, discrete) {
@@ -199,7 +209,7 @@ fn blocks(t: &Totals, model: &ConsolidatedModel) -> Vec<Block> {
         let level = theme::power_level(t.dedicated_power_watts / t.power_limit_watts);
         (
             level.value_color(),
-            format!("of {} limit", fmt_watts(t.power_limit_watts)),
+            format!("limit {}", fmt_watts(t.power_limit_watts)),
         )
     } else {
         (TEXT, "accelerators".to_string())
@@ -214,7 +224,7 @@ fn blocks(t: &Totals, model: &ConsolidatedModel) -> Vec<Block> {
     if let Some((temp, slowdown)) = t.max_temperature {
         let level = theme::temp_level(temp, slowdown);
         let note = match slowdown {
-            Some(s) => format!("slowdown at {s}°C"),
+            Some(s) => format!("slowdown {s}°C"),
             None => "hottest device".to_string(),
         };
         out.push(Block {
@@ -307,8 +317,8 @@ mod tests {
     #[test]
     fn overview_separates_unified_memory_from_vram() {
         let out = render(160);
-        assert!(out.contains("2 / 2 up"), "{out}");
-        assert!(out.contains("all reachable"), "{out}");
+        assert!(out.contains("2 of 2 hosts up"), "{out}");
+        assert!(!out.contains("HOSTS"), "{out}");
         assert!(out.contains("UNIFIED MEMORY"), "{out}");
         assert!(out.contains("154 / 256 GiB"), "{out}");
         assert!(out.contains("VRAM"), "{out}");
@@ -316,10 +326,36 @@ mod tests {
         assert!(out.contains("1 SoC · 2 dGPU"), "{out}");
         assert!(out.contains("28% avg"), "{out}");
         assert!(out.contains("212 W"), "{out}");
-        assert!(out.contains("of 1.20 kW limit"), "{out}");
+        assert!(out.contains("limit 1.20 kW"), "{out}");
         // No host RAM block without memory series for non-unified hosts.
         assert!(!out.contains("HOST RAM"), "{out}");
         assert!(!out.contains("GPU Cores"), "{out}");
+    }
+
+    #[test]
+    fn a_down_host_gets_a_block() {
+        let (gpus, tabs, mut statuses) = mac_and_box();
+        statuses
+            .get_mut("10.10.10.2:9090")
+            .unwrap()
+            .mark_failure("Connection refused".to_string());
+        let gpus: Vec<_> = gpus
+            .into_iter()
+            .filter(|g| g.host_id != "10.10.10.2:9090")
+            .collect();
+        let model = model_of(&gpus, &[], &tabs, &statuses);
+        let mut buf = Vec::new();
+        let title = TitleInfo {
+            time: "t",
+            version: "v",
+            runtime: None,
+        };
+        render_header(&mut buf, &model, &title, 160);
+        let out = strip(&String::from_utf8(buf).unwrap());
+        assert!(out.contains("1 of 2 hosts up"), "{out}");
+        assert!(out.contains("1 / 2 up"), "{out}");
+        assert!(out.contains("down: ians-Mac-Studio"), "{out}");
+        assert!(!out.contains("UNIFIED MEMORY"), "{out}");
     }
 
     #[test]

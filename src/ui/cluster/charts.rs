@@ -79,8 +79,11 @@ pub fn render_history<W: Write>(
     // A title line, then three charts of at least two rows with a label.
     let columns: Vec<Column> = if !devices.is_empty() && per_device_rows > 3 * 3 {
         devices.iter().map(|d| device_column(d, series)).collect()
-    } else {
+    } else if devices.len() == model.totals.devices {
         vec![cluster_column(model, series)]
+    } else {
+        // A host tab: the cluster-wide series would not be this host's.
+        return;
     };
     let per_row = fit.min(columns.len());
     let column_rows = columns.len().div_ceil(per_row);
