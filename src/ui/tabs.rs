@@ -14,12 +14,13 @@
 
 use crossterm::{
     queue,
-    style::{Color, Print},
+    style::{Attribute, Color, Print, SetAttribute},
 };
 use std::io::Write;
 
 use crate::app_state::AppState;
 use crate::ui::text::print_colored_text;
+use crate::ui::theme;
 
 /// Reserved tab name for the cluster-wide Users tab (issue #189).
 ///
@@ -119,7 +120,7 @@ pub fn draw_tabs<W: Write>(stdout: &mut W, state: &AppState, cols: u16) {
             if state.current_tab == 0 {
                 labels.push((format!(" {all_tab} "), Color::Black));
             } else {
-                labels.push((format!(" {all_tab} "), Color::White));
+                labels.push((format!(" {all_tab} "), theme::SUBTLE));
             }
             available_width -= tab_width;
         }
@@ -154,7 +155,9 @@ pub fn draw_tabs<W: Write>(stdout: &mut W, state: &AppState, cols: u16) {
                     _ => base,
                 }
             } else {
-                status.actual_hostname.as_ref().unwrap_or(tab).clone()
+                crate::ui::consolidated::model::short_host_label(
+                    status.actual_hostname.as_ref().unwrap_or(tab),
+                )
             }
         } else {
             tab.to_string()
@@ -181,9 +184,9 @@ pub fn draw_tabs<W: Write>(stdout: &mut W, state: &AppState, cols: u16) {
             };
 
             if is_connected {
-                Color::White // Connected: normal white text
+                theme::SUBTLE
             } else {
-                Color::DarkGrey // Disconnected: dimmed grey text
+                theme::CRIT // Disconnected host
             }
         };
 
@@ -198,11 +201,22 @@ pub fn draw_tabs<W: Write>(stdout: &mut W, state: &AppState, cols: u16) {
 }
 
 fn render_tab_labels<W: Write>(stdout: &mut W, labels: Vec<(String, Color)>) {
-    queue!(stdout, Print("Tabs: ")).unwrap();
+    queue!(stdout, Print(" ")).unwrap();
     for (text, color) in labels {
         if color == Color::Black {
-            // Selected tab: white text on blue background for good visibility
-            print_colored_text(stdout, &text, Color::White, Some(Color::Blue), None);
+            // Selected tab: the accent as a background, or reverse video
+            // under NO_COLOR.
+            if theme::color_enabled() {
+                print_colored_text(stdout, &text, theme::ON_ACCENT, Some(theme::ACCENT), None);
+            } else {
+                queue!(
+                    stdout,
+                    SetAttribute(Attribute::Reverse),
+                    Print(&text),
+                    SetAttribute(Attribute::Reset)
+                )
+                .unwrap();
+            }
         } else {
             print_colored_text(stdout, &text, color, None, None);
         }
@@ -211,9 +225,8 @@ fn render_tab_labels<W: Write>(stdout: &mut W, labels: Vec<(String, Color)>) {
 }
 
 fn render_tab_separator<W: Write>(stdout: &mut W, cols: u16) {
-    // Print separator
     let separator = "─".repeat(cols as usize);
-    print_colored_text(stdout, &separator, Color::DarkGrey, None, None);
+    print_colored_text(stdout, &separator, theme::RULE, None, None);
     queue!(stdout, Print("\r\n")).unwrap();
 }
 

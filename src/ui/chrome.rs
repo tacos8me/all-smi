@@ -23,6 +23,7 @@ use crossterm::{
 use crate::app_state::AppState;
 use crate::ui::constants::{ANIMATION_SPEED, BLOCK_SIZE_DIVISOR, BLOCK_SIZE_MAX, SCREEN_MARGIN};
 use crate::ui::text::{display_width, print_colored_text, truncate_to_width};
+use crate::ui::theme;
 
 pub fn print_loading_indicator<W: Write>(
     stdout: &mut W,
@@ -198,7 +199,7 @@ pub fn print_function_keys<W: Write>(
     let function_keys = if is_remote {
         // Remote mode: only GPU sorting
         format!(
-            "h:Help q:Exit ←→:Tabs ↑↓:Scroll PgUp/PgDn:Page d:Default u:Util g:GPU-Mem [{sort_indicator}]"
+            "h:Help q:Exit ←→:Tabs ↑↓:Scroll PgUp/PgDn:Page x:Details d:Default u:Util g:GPU-Mem [{sort_indicator}]"
         )
     } else {
         // Local mode: both process and GPU sorting
@@ -239,8 +240,7 @@ pub fn print_function_keys<W: Write>(
         std::borrow::Cow::Borrowed(truncated_keys.as_str())
     };
 
-    // Print function keys
-    print_colored_text(stdout, &final_function_keys, Color::DarkGreen, None, None);
+    print_key_hints(stdout, &final_function_keys);
 
     // Print notification if there is one
     if notification_len > 0 {
@@ -250,11 +250,11 @@ pub fn print_function_keys<W: Write>(
         // Print notification with appropriate color
         let notification_color =
             if notification_msg.contains("Error") || notification_msg.contains("Failed") {
-                Color::Red
+                theme::CRIT
             } else if notification_msg.contains("Warning") {
-                Color::Yellow
+                theme::WARN
             } else {
-                Color::Cyan
+                theme::ACCENT
             };
 
         print_colored_text(stdout, notification_msg, notification_color, None, None);
@@ -273,11 +273,17 @@ pub fn print_function_keys<W: Write>(
         print_colored_text(
             stdout,
             &" ".repeat(remaining_space),
-            Color::White,
+            theme::MUTED,
             None,
             None,
         );
     }
+}
+
+/// Key hints, quiet: one muted span so the footer never competes with
+/// the readings above it.
+fn print_key_hints<W: Write>(stdout: &mut W, hints: &str) {
+    print_colored_text(stdout, hints, theme::MUTED, None, None);
 }
 
 /// Render the replay status bar. Active when `view --replay` is running.

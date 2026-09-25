@@ -178,6 +178,7 @@ pub fn truncate_to_width(s: &str, max_width: usize) -> Cow<'_, str> {
 }
 
 // Helper function to format RAM values with appropriate units
+#[allow(dead_code)] // The remote overview now formats GiB itself.
 pub fn format_ram_value(gb_value: f64) -> String {
     if gb_value >= 1024.0 {
         format!("{:.2}TB", gb_value / 1024.0)
@@ -201,6 +202,16 @@ pub fn print_colored_text<W: Write>(
     bg_color: Option<Color>,
     width: Option<usize>,
 ) {
+    // `NO_COLOR`: the same text and layout, without any color escapes.
+    if !crate::ui::theme::color_enabled() {
+        let adjusted: Cow<'_, str> = match width {
+            Some(w) if text.len() > w => truncate_to_width(text, w),
+            Some(w) if text.len() < w => Cow::Owned(format!("{text:<w$}")),
+            _ => Cow::Borrowed(text),
+        };
+        queue!(stdout, Print(adjusted.as_ref())).unwrap();
+        return;
+    }
     match width {
         Some(w) => {
             // Width-adjusted path: only allocate when padding/truncation is needed
