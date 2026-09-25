@@ -395,7 +395,7 @@ pub(crate) fn render_links<W: Write>(
     } else {
         0
     };
-    for host in inputs.host_probes {
+    for host in ordered_probes(model, inputs.host_probes) {
         for iface in &host.interfaces {
             let mut line = Line::default();
             line.cell("LINK", c.host, HEADING)
@@ -438,7 +438,7 @@ pub(crate) fn render_locks<W: Write>(
     model: &ConsolidatedModel,
     inputs: &ConsolidatedInputs<'_>,
 ) {
-    for host in inputs.host_probes {
+    for host in ordered_probes(model, inputs.host_probes) {
         for lock in &host.locks {
             let mut line = Line::default();
             line.cell("LOCK", c.host, HEADING)
@@ -468,6 +468,20 @@ pub(crate) fn render_locks<W: Write>(
             w.emit(line);
         }
     }
+}
+
+/// Probe rows follow the device table's host order; scrapes land in
+/// whatever order the hosts answered.
+fn ordered_probes<'a>(model: &ConsolidatedModel, probes: &'a [HostProbes]) -> Vec<&'a HostProbes> {
+    let mut ordered: Vec<&HostProbes> = probes.iter().collect();
+    ordered.sort_by_key(|p| {
+        model
+            .hosts
+            .iter()
+            .position(|h| h.host_id == p.host_id)
+            .unwrap_or(usize::MAX)
+    });
+    ordered
 }
 
 // ---------------------------------------------------------------------------
@@ -894,6 +908,23 @@ mod tests {
         let out = render(160, 60, &[], &down);
         assert!(out.contains("unreachable: connection failed"));
         assert!(out.contains("waiting for the first /running poll"));
+    }
+
+    #[test]
+    fn probe_rows_follow_host_order() {
+        let mut both = vec![HostProbes {
+            host_id: "10.10.10.1:9090".to_string(),
+            interfaces: vec![NetInterfaceSample {
+                interface: "enp161s0f0np0".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        both.extend(probes());
+        let out = render(160, 60, &both, &ConsolidatedState::default());
+        let mac = out.find("en0 ").unwrap();
+        let rtx = out.find("enp161s0f0np0").unwrap();
+        assert!(mac < rtx, "{out}");
     }
 
     #[test]
