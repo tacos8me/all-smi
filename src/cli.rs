@@ -152,6 +152,16 @@ pub struct ApiArgs {
     /// or the listener binds every interface (`0.0.0.0`).
     #[arg(long, num_args = 1.., value_delimiter = ',')]
     pub bind: Vec<std::net::IpAddr>,
+    /// Export byte counters and rates for these network interfaces
+    /// (`all_smi_network_*`), e.g. `--net-iface en0`. Repeatable or
+    /// comma-separated. Falls back to `[api].net_interfaces`.
+    #[arg(long = "net-iface", num_args = 1.., value_delimiter = ',')]
+    pub net_iface: Vec<String>,
+    /// Export which processes hold these lock files open
+    /// (`all_smi_lock_*`), found read-only with `lsof`; the lock itself
+    /// is never taken. Repeatable. Falls back to `[api].watch_locks`.
+    #[arg(long = "watch-lock", num_args = 1..)]
+    pub watch_lock: Vec<PathBuf>,
 }
 
 #[derive(Parser, Clone)]

@@ -386,7 +386,7 @@ fn api_socket_as_bool_and_path() {
 }
 
 #[test]
-fn api_bind_addresses_parse_and_reject_garbage() {
+fn api_bind_and_probe_keys_parse_and_reject_garbage() {
     let _guard = crate::common::test_env::lock_env();
     clear_env();
     let dir = tempfile::tempdir().unwrap();
@@ -396,6 +396,19 @@ fn api_bind_addresses_parse_and_reject_garbage() {
     let expected: Vec<std::net::IpAddr> =
         vec!["10.10.10.2".parse().unwrap(), "127.0.0.1".parse().unwrap()];
     assert_eq!(outcome.settings.api.bind, expected);
+    assert!(outcome.settings.unknown_keys.is_empty());
+
+    std::fs::write(
+        &path,
+        "[api]\nnet_interfaces = [\"en0\"]\nwatch_locks = [\"~/llm/locks/gpu.lock\"]\n",
+    )
+    .unwrap();
+    let outcome = load(Some(&path)).expect("must load");
+    assert_eq!(outcome.settings.api.net_interfaces, vec!["en0".to_string()]);
+    assert_eq!(
+        outcome.settings.api.watch_locks,
+        vec!["~/llm/locks/gpu.lock".to_string()]
+    );
     assert!(outcome.settings.unknown_keys.is_empty());
 
     std::fs::write(&path, "[api]\nbind = [\"not-an-ip\"]\n").unwrap();

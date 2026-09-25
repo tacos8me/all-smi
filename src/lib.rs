@@ -171,6 +171,11 @@ pub mod metrics;
 #[cfg(feature = "cli")]
 pub mod network;
 
+/// Opt-in host probes (network interface counters, lock-file holders)
+/// exported by `all-smi api` and parsed back by the remote viewer.
+#[cfg(feature = "cli")]
+pub mod probes;
+
 /// Storage monitoring.
 pub mod storage;
 

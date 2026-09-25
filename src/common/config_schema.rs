@@ -96,6 +96,10 @@ pub struct ApiSection {
     pub interval_secs: Option<u64>,
     /// TCP listener addresses (`bind = ["10.0.0.1", "127.0.0.1"]`).
     pub bind: Option<Vec<String>>,
+    /// Interfaces whose byte counters are exported.
+    pub net_interfaces: Option<Vec<String>>,
+    /// Lock files whose holders are exported.
+    pub watch_locks: Option<Vec<String>>,
 }
 
 /// Tri-state representation of `[api].socket`.

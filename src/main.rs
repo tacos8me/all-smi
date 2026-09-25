@@ -26,6 +26,7 @@ mod service_cmd;
 mod parsing;
 mod metrics;
 mod network;
+mod probes;
 mod record;
 mod snapshot;
 mod storage;
@@ -316,6 +317,17 @@ async fn run_command(cli: Cli, settings: Settings) {
             }
             if args.bind.is_empty() {
                 args.bind = settings.api.bind.clone();
+            }
+            if args.net_iface.is_empty() {
+                args.net_iface = settings.api.net_interfaces.clone();
+            }
+            if args.watch_lock.is_empty() {
+                args.watch_lock = settings
+                    .api
+                    .watch_locks
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect();
             }
             #[cfg(unix)]
             {
@@ -667,6 +679,8 @@ async fn run_command(cli: Cli, settings: Settings) {
                         #[cfg(unix)]
                         socket: None,
                         bind: Vec::new(),
+                        net_iface: Vec::new(),
+                        watch_lock: Vec::new(),
                     };
                     return Box::pin(run_command(
                         Cli {

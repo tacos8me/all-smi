@@ -200,6 +200,10 @@ pub struct ApiSettings {
     pub interval_secs: u64,
     /// TCP listener addresses; empty means every interface.
     pub bind: Vec<std::net::IpAddr>,
+    /// Interfaces whose byte counters are exported (`--net-iface`).
+    pub net_interfaces: Vec<String>,
+    /// Lock files whose holders are exported (`--watch-lock`).
+    pub watch_locks: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -252,6 +256,8 @@ impl Default for Settings {
                 processes: false,
                 interval_secs: 3,
                 bind: Vec::new(),
+                net_interfaces: Vec::new(),
+                watch_locks: Vec::new(),
             },
             alerts: AlertConfig::default(),
             energy: EnergyConfig::default(),
@@ -505,7 +511,15 @@ fn scan_unknown_subkeys(top: &toml::map::Map<String, TomlValue>, out: &mut BTree
     check("view", &["hostfile", "hosts", "interval_secs"], out, top);
     check(
         "api",
-        &["port", "socket", "processes", "interval_secs", "bind"],
+        &[
+            "port",
+            "socket",
+            "processes",
+            "interval_secs",
+            "bind",
+            "net_interfaces",
+            "watch_locks",
+        ],
         out,
         top,
     );

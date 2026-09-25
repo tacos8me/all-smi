@@ -222,11 +222,19 @@ pub async fn run_api_mode(args: &ApiArgs, settings: &Settings) {
 
     // Spawn the background collection task. It owns the reader factories
     // and is the only place that calls them on the live server.
+    let probes = crate::probes::ProbeSampler::new(
+        args.net_iface.clone(),
+        args.watch_lock
+            .iter()
+            .map(crate::common::paths::expand_tilde)
+            .collect(),
+    );
     tokio::spawn(run_collection_loop(
         state_clone.clone(),
         bus.clone(),
         interval,
         processes,
+        probes,
     ));
 
     // Compose the router state so each handler extracts only the

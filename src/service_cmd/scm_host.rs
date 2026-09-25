@@ -274,6 +274,13 @@ fn api_args(settings: &Settings) -> ApiArgs {
         interval: Some(settings.api.interval_secs),
         processes: Some(settings.api.processes),
         bind: settings.api.bind.clone(),
+        net_iface: settings.api.net_interfaces.clone(),
+        watch_lock: settings
+            .api
+            .watch_locks
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect(),
     }
 }
 

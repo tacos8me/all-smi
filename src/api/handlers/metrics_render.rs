@@ -34,6 +34,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::api::handlers::ready::is_ready;
+use crate::api::metrics::MetricExporter;
+use crate::api::metrics::probes::ProbeMetricExporter;
 use crate::api::metrics::render::{MetricsRenderInputs, render_prometheus_exposition};
 use crate::app_state::AppState;
 
@@ -62,5 +64,11 @@ pub async fn metrics_handler(State(state): State<SharedState>) -> String {
         // #324).
         ready: is_ready(&state),
     };
-    render_prometheus_exposition(&inputs)
+    let mut body = render_prometheus_exposition(&inputs);
+    // Host probes are appended outside the shared renderer: they only
+    // exist when the server was started with `--net-iface` /
+    // `--watch-lock`, so the byte-for-byte parity between `/metrics` and
+    // `snapshot --format prometheus` still holds for every stock exporter.
+    body.push_str(&ProbeMetricExporter::new(&state.host_probes).export_metrics());
+    body
 }

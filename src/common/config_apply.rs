@@ -147,6 +147,12 @@ fn apply_file_api(raw: &RawConfig, settings: &mut Settings) -> Result<(), Config
             })
             .collect::<Result<_, _>>()?;
     }
+    if let Some(ifaces) = &a.net_interfaces {
+        settings.api.net_interfaces = ifaces.clone();
+    }
+    if let Some(locks) = &a.watch_locks {
+        settings.api.watch_locks = locks.clone();
+    }
     Ok(())
 }
 

@@ -23,6 +23,8 @@ pub mod hardware;
 pub mod memory;
 pub mod mig;
 pub mod npu;
+/// Opt-in network-interface and lock-file probes (`--net-iface`, `--watch-lock`).
+pub mod probes;
 pub mod process;
 pub mod render;
 pub mod runtime;

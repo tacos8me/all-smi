@@ -27,6 +27,7 @@ use crate::device::{
     ChassisInfo, CpuInfo, GpuInfo, MemoryInfo, ProcessInfo, create_chassis_reader, get_cpu_readers,
     get_gpu_readers, get_memory_readers,
 };
+use crate::probes::ProbeSampler;
 use crate::snapshot::{SNAPSHOT_SCHEMA_VERSION, Snapshot};
 use crate::storage::disk_cache::DiskCache;
 use crate::utils::get_hostname;
@@ -54,6 +55,7 @@ pub async fn run_collection_loop(
     bus: FrameBus,
     interval_secs: u64,
     processes_enabled: bool,
+    mut probes: Option<ProbeSampler>,
 ) {
     // CPU readers first: the macOS reader takes its first utilization sample
     // at construction and its first tick waits only for what is left of the
@@ -114,6 +116,13 @@ pub async fn run_collection_loop(
 
         let storage_info = disks.storage_info(&hostname);
 
+        // Opt-in host probes (`--net-iface`, `--watch-lock`); `None` on a
+        // stock exporter, which then does no extra work at all.
+        let host_probes = probes
+            .as_mut()
+            .map(|p| vec![p.sample(&hostname)])
+            .unwrap_or_default();
+
         // Build the shared `Snapshot` first using cloned collections so
         // the Prometheus-serving `AppState` and the SSE/snapshot frame
         // stay in sync for the same cycle. The clones are unavoidable
@@ -150,6 +159,7 @@ pub async fn run_collection_loop(
             guard.process_info = all_processes;
             guard.chassis_info = chassis_info;
             guard.storage_info = storage_info;
+            guard.host_probes = host_probes;
             if guard.loading {
                 guard.loading = false;
             }
