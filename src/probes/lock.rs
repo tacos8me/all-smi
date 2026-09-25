@@ -20,6 +20,12 @@
 //! block, or perturb the lock the way a `flock(LOCK_NB)` test would.
 //! Holder names come from `ps -o comm=`, which reflects a `setproctitle`
 //! rename (e.g. a Python server that calls itself `omlx-server`).
+//!
+//! "Held since" is when the exporter first saw the current holder set.
+//! For a holder that already held the lock when the exporter started,
+//! that moment says nothing, so the holder's process start time (from
+//! `ps -o etime=`) stands in: lock-holding servers take the lock as they
+//! start, and it is never later than the true acquisition.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -59,6 +65,8 @@ pub struct LockWatcher {
     paths: Vec<PathBuf>,
     /// Per path: the holder pids last seen and when that set first appeared.
     first_seen: HashMap<String, (Vec<u32>, u64)>,
+    /// False until the first sample, whose holders predate the exporter.
+    primed: bool,
 }
 
 impl LockWatcher {
@@ -66,6 +74,7 @@ impl LockWatcher {
         Self {
             paths,
             first_seen: HashMap::new(),
+            primed: false,
         }
     }
 
@@ -80,8 +89,12 @@ impl LockWatcher {
             let Some(mut holders) = lsof_holders(&key) else {
                 continue;
             };
-            resolve_display_names(&mut holders);
+            let oldest_elapsed = resolve_process_info(&mut holders);
             let pids: Vec<u32> = holders.iter().map(|h| h.pid).collect();
+            let first_seen_at = match oldest_elapsed {
+                Some(elapsed) if !self.primed => now.saturating_sub(elapsed),
+                _ => now,
+            };
             let since_unix = if pids.is_empty() {
                 self.first_seen.remove(&key);
                 None
@@ -89,7 +102,7 @@ impl LockWatcher {
                 let entry = self
                     .first_seen
                     .entry(key.clone())
-                    .or_insert_with(|| (pids.clone(), now));
+                    .or_insert_with(|| (pids.clone(), first_seen_at));
                 if entry.0 != pids {
                     *entry = (pids, now);
                 }
@@ -101,6 +114,7 @@ impl LockWatcher {
                 since_unix,
             });
         }
+        self.primed = true;
         out
     }
 }
@@ -152,41 +166,61 @@ pub(crate) fn parse_lsof_fields(text: &str) -> Vec<LockHolder> {
 }
 
 /// Replace lsof's truncated command names with `ps -o comm=`, which shows
-/// a process's `setproctitle` name. Keeps the lsof name when ps fails.
-fn resolve_display_names(holders: &mut [LockHolder]) {
+/// a process's `setproctitle` name, and return the longest-running
+/// holder's age in seconds. Keeps the lsof names when ps fails.
+fn resolve_process_info(holders: &mut [LockHolder]) -> Option<u64> {
     if holders.is_empty() {
-        return;
+        return None;
     }
     let pid_list = holders
         .iter()
         .map(|h| h.pid.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let Ok(output) =
-        run_command_with_timeout("ps", &["-o", "pid=,comm=", "-p", &pid_list], PROBE_TIMEOUT)
-    else {
-        return;
-    };
-    let names = parse_ps_comm(&String::from_utf8_lossy(&output.stdout));
+    let output = run_command_with_timeout(
+        "ps",
+        &["-o", "pid=,etime=,comm=", "-p", &pid_list],
+        PROBE_TIMEOUT,
+    )
+    .ok()?;
+    let info = parse_ps(&String::from_utf8_lossy(&output.stdout));
+    let mut oldest = None;
     for holder in holders.iter_mut() {
-        if let Some(name) = names.get(&holder.pid) {
+        if let Some((name, elapsed)) = info.get(&holder.pid) {
             holder.command = name.clone();
+            oldest = oldest.max(*elapsed);
         }
     }
+    oldest
 }
 
-/// Parse `ps -o pid=,comm=` lines into pid → executable basename.
-pub(crate) fn parse_ps_comm(text: &str) -> HashMap<u32, String> {
+/// Parse `ps -o pid=,etime=,comm=` lines into pid → (executable basename,
+/// seconds since the process started).
+pub(crate) fn parse_ps(text: &str) -> HashMap<u32, (String, Option<u64>)> {
     text.lines()
         .filter_map(|line| {
-            let line = line.trim_start();
-            let (pid, comm) = line.split_once(char::is_whitespace)?;
+            let (pid, rest) = line.trim_start().split_once(char::is_whitespace)?;
             let pid = pid.parse::<u32>().ok()?;
+            let (etime, comm) = rest.trim_start().split_once(char::is_whitespace)?;
+            let elapsed = parse_etime(etime);
             let comm = comm.trim();
             let base = comm.rsplit('/').next().unwrap_or(comm);
-            (!base.is_empty()).then(|| (pid, sanitize(base)))
+            (!base.is_empty()).then(|| (pid, (sanitize(base), elapsed)))
         })
         .collect()
+}
+
+/// `ps` elapsed time, `[[dd-]hh:]mm:ss`, in seconds.
+pub(crate) fn parse_etime(etime: &str) -> Option<u64> {
+    let (days, clock) = match etime.split_once('-') {
+        Some((d, rest)) => (d.parse::<u64>().ok()?, rest),
+        None => (0, etime),
+    };
+    let mut secs = 0u64;
+    for part in clock.split(':') {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some(days * 86_400 + secs)
 }
 
 /// Drop control characters so a hostile process name cannot inject
@@ -224,13 +258,20 @@ mod tests {
     }
 
     #[test]
-    fn parses_ps_comm_basename_and_rename() {
-        let names = parse_ps_comm(
-            "35489 /Users/ian/llm/.venv/bin/python\n35491 omlx-server      \n  7 /Apps/My App/x\n",
+    fn parses_ps_basename_rename_and_age() {
+        let info = parse_ps(
+            "35489 01:02:03 /Users/ian/llm/.venv/bin/python\n35491    21:47 omlx-server      \n  7 2-00:00:05 /Apps/My App/x\n",
         );
-        assert_eq!(names.get(&35489).map(String::as_str), Some("python"));
-        assert_eq!(names.get(&35491).map(String::as_str), Some("omlx-server"));
-        assert_eq!(names.get(&7).map(String::as_str), Some("x"));
+        assert_eq!(info[&35489], ("python".to_string(), Some(3723)));
+        assert_eq!(info[&35491], ("omlx-server".to_string(), Some(1307)));
+        assert_eq!(info[&7], ("x".to_string(), Some(172_805)));
+    }
+
+    #[test]
+    fn etime_formats() {
+        assert_eq!(parse_etime("05"), Some(5));
+        assert_eq!(parse_etime("1-00:00:00"), Some(86_400));
+        assert_eq!(parse_etime("bogus"), None);
     }
 
     #[test]
@@ -265,6 +306,9 @@ mod tests {
         let me = std::process::id();
         assert!(sample.holders.iter().any(|h| h.pid == me), "{sample:?}");
         let first_since = sample.since_unix.expect("held lock has a since time");
+        // Seen on the first sample: dated no later than now, from the
+        // holder's process start.
+        assert!(first_since <= unix_now());
         let again = watcher.sample().into_iter().next().unwrap();
         assert_eq!(again.since_unix, Some(first_since));
     }
