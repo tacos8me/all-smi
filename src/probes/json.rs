@@ -103,6 +103,9 @@ impl JsonProbeSample {
     }
 }
 
+/// One endpoint's answer: whether it was 2xx, and its fields.
+type Fetched = (bool, BTreeMap<String, f64>);
+
 /// Polls the configured endpoints and remembers the previous values.
 pub struct JsonProber {
     specs: Vec<JsonProbeSpec>,
@@ -119,32 +122,46 @@ impl JsonProber {
 
     pub fn sample(&mut self) -> Vec<JsonProbeSample> {
         let specs = self.specs.clone();
+        // One thread per endpoint, so a slow one costs one timeout per
+        // cycle rather than one per probe.
+        let fetched: Vec<(Option<Fetched>, Instant)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = specs
+                .iter()
+                .map(|spec| {
+                    scope.spawn(|| {
+                        let result = http_get(&spec.url).ok().and_then(|(status, body)| {
+                            let json: Value = serde_json::from_slice(&body).ok()?;
+                            Some(((200..300).contains(&status), flatten(&json)))
+                        });
+                        (result, Instant::now())
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or((None, Instant::now())))
+                .collect()
+        });
         specs
             .iter()
-            .map(|spec| {
-                let fetched = http_get(&spec.url).ok().and_then(|(status, body)| {
-                    let json: Value = serde_json::from_slice(&body).ok()?;
-                    Some(((200..300).contains(&status), flatten(&json)))
-                });
-                let now = Instant::now();
-                match fetched {
-                    Some((up, values)) => {
-                        let rates = self.rates(&spec.name, now, &values);
-                        self.previous
-                            .insert(spec.name.clone(), (now, values.clone()));
-                        JsonProbeSample {
-                            name: spec.name.clone(),
-                            up,
-                            values,
-                            rates,
-                        }
+            .zip(fetched)
+            .map(|(spec, (fetched, now))| match fetched {
+                Some((up, values)) => {
+                    let rates = self.rates(&spec.name, now, &values);
+                    self.previous
+                        .insert(spec.name.clone(), (now, values.clone()));
+                    JsonProbeSample {
+                        name: spec.name.clone(),
+                        up,
+                        values,
+                        rates,
                     }
-                    None => {
-                        self.previous.remove(&spec.name);
-                        JsonProbeSample {
-                            name: spec.name.clone(),
-                            ..Default::default()
-                        }
+                }
+                None => {
+                    self.previous.remove(&spec.name);
+                    JsonProbeSample {
+                        name: spec.name.clone(),
+                        ..Default::default()
                     }
                 }
             })
