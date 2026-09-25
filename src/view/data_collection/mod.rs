@@ -14,6 +14,7 @@
 
 pub mod aggregator;
 pub mod local_collector;
+pub mod pipeline_poller;
 pub mod remote_collector;
 pub mod replay_collector;
 pub mod ssh_strategy;
@@ -22,6 +23,7 @@ pub mod strategy;
 #[allow(unused_imports)] // Re-exported for embedding crates / future callers.
 pub use aggregator::DataAggregator;
 pub use local_collector::LocalCollector;
+pub use pipeline_poller::run_pipeline_poller;
 pub use remote_collector::RemoteCollectorBuilder;
 pub use replay_collector::{ReplayDriver, initial_replay_state};
 pub use ssh_strategy::{SshStrategy, SshStrategyConfig};

@@ -38,8 +38,12 @@ use crate::ui::text::{display_width, print_colored_text, truncate_to_width};
 
 use super::history::{self, ConsolidatedState, SeriesHistory};
 use super::model::{ConsolidatedModel, DeviceRow, HostSection};
+use super::pipeline_render;
 
 const GIB: f64 = (1u64 << 30) as f64;
+/// Width of the second column of the probe and pipeline rows (host label,
+/// or host label and port).
+pub(crate) const SUBJECT: usize = 22;
 const LABEL: Color = Color::DarkGrey;
 const VALUE: Color = Color::White;
 const HEADING: Color = Color::Cyan;
@@ -342,6 +346,21 @@ fn render_probes<W: Write>(
 ) {
     let has_links = inputs.host_probes.iter().any(|p| !p.interfaces.is_empty());
     let has_locks = inputs.host_probes.iter().any(|p| !p.locks.is_empty());
+    if let Some(pipeline) = inputs.state.pipeline.as_ref() {
+        // The pipeline panel (`--icculus`) groups the engine and
+        // llama-swap with the lock holder and link it depends on.
+        w.blank();
+        pipeline_render::render_pipeline_heading(w, pipeline);
+        pipeline_render::render_engine(w, c, model, pipeline, &inputs.state.history);
+        pipeline_render::render_swap(w, c, model, pipeline);
+        if has_locks {
+            render_locks(w, c, model, inputs);
+        }
+        if has_links {
+            render_links(w, c, model, inputs);
+        }
+        return;
+    }
     if !has_links && !has_locks {
         return;
     }
@@ -360,8 +379,8 @@ pub(crate) fn render_links<W: Write>(
     model: &ConsolidatedModel,
     inputs: &ConsolidatedInputs<'_>,
 ) {
-    let spark = if w.cols >= c.host + 70 {
-        ((w.cols - c.host - 64) / 2).clamp(6, 30)
+    let spark = if w.cols >= c.host + SUBJECT + 52 {
+        ((w.cols - c.host - SUBJECT - 46) / 2).clamp(6, 30)
     } else {
         0
     };
@@ -369,7 +388,7 @@ pub(crate) fn render_links<W: Write>(
         for iface in &host.interfaces {
             let mut line = Line::default();
             line.cell("LINK", c.host, HEADING)
-                .cell(&model.host_label(&host.host_id), 18, VALUE)
+                .cell(&model.host_label(&host.host_id), SUBJECT, VALUE)
                 .cell(&iface.interface, 16, VALUE)
                 .text("↓ ", LABEL)
                 .rcell(&fmt_rate(iface.rx_bytes_per_sec), 11, Color::Green)
@@ -412,7 +431,7 @@ pub(crate) fn render_locks<W: Write>(
         for lock in &host.locks {
             let mut line = Line::default();
             line.cell("LOCK", c.host, HEADING)
-                .cell(&model.host_label(&host.host_id), 18, VALUE)
+                .cell(&model.host_label(&host.host_id), SUBJECT, VALUE)
                 .text(&tilde_home(&lock.path), VALUE)
                 .text("  ", VALUE);
             if lock.holders.is_empty() {
@@ -509,6 +528,11 @@ pub(crate) struct Line {
 }
 
 impl Line {
+    /// Display width of everything added so far.
+    pub(crate) fn width(&self) -> usize {
+        self.segs.iter().map(|(t, _)| display_width(t)).sum()
+    }
+
     pub(crate) fn text(&mut self, s: &str, color: Color) -> &mut Self {
         if !s.is_empty() {
             self.segs.push((s.to_string(), color));
@@ -804,6 +828,59 @@ mod tests {
         let out = strip_ansi(&String::from_utf8(buf).unwrap());
         assert!(out.contains("(1 up)"));
         assert!(out.contains("unreachable: Connection refused"), "{out}");
+    }
+
+    #[test]
+    fn pipeline_panel_renders_engine_swap_lock_and_link() {
+        use crate::ui::consolidated::pipeline::{
+            EngineCache, EngineHealth, PipelineConfig, PipelineStatus, Probe, SwapModel,
+        };
+        let mut status = PipelineStatus::new(PipelineConfig::icculus(None, None));
+        status.engine = Probe::Ok(EngineHealth {
+            ok: Some(true),
+            sessions: Some(2),
+            connections: Some(1),
+            gpu_job: Some(serde_json::Value::String("prefill".to_string())),
+            gpu_job_s: Some(1.25),
+            queued_jobs: Some(3),
+            version: Some("d11dccf".to_string()),
+            numerics: Some("og-s4.3".to_string()),
+            uptime_s: Some(4227.0),
+            cache: Some(EngineCache {
+                lookups: Some(406),
+                hits: Some(301),
+                entries: Some(777),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        status.swap = Probe::Ok(vec![SwapModel {
+            model: "ds41".to_string(),
+            state: "ready".to_string(),
+            name: "Icculus".to_string(),
+        }]);
+        let state = ConsolidatedState {
+            pipeline: Some(status),
+            ..Default::default()
+        };
+        let out = render(160, 60, &probes(), &state);
+        assert!(out.contains("── Icculus pipeline"), "{out}");
+        assert!(out.contains("vllm :10051"), "{out}");
+        assert!(out.contains("ok · d11dccf · og-s4.3 · up 1h 10m"), "{out}");
+        assert!(out.contains("sessions 2 · connections 1 · gpu busy: prefill 1.2s · queue 3"));
+        assert!(out.contains("prefix cache 301/406 hits (74.1%) · 777 entries"));
+        assert!(out.contains("ians-Mac-Studio :8080"), "{out}");
+        assert!(out.contains("ds41 ready  Icculus"));
+        assert!(out.contains("held by omlx-server"));
+        assert!(out.contains("1.25 GB/s"));
+
+        let mut down = state.clone();
+        let p = down.pipeline.as_mut().unwrap();
+        p.engine = Probe::Err("connection failed".to_string());
+        p.swap = Probe::Pending;
+        let out = render(160, 60, &[], &down);
+        assert!(out.contains("unreachable: connection failed"));
+        assert!(out.contains("waiting for the first /running poll"));
     }
 
     #[test]

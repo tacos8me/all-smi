@@ -239,6 +239,10 @@ pub struct RecordSettings {
 #[derive(Debug, Clone, Default)]
 pub struct ConsolidatedSettings {
     pub enabled: bool,
+    /// Show the Icculus pipeline panel (`--icculus`).
+    pub icculus: bool,
+    pub icculus_health_url: Option<String>,
+    pub icculus_swap_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -566,7 +570,17 @@ fn scan_unknown_subkeys(top: &toml::map::Map<String, TomlValue>, out: &mut BTree
         out,
         top,
     );
-    check("consolidated", &["enabled"], out, top);
+    check(
+        "consolidated",
+        &[
+            "enabled",
+            "icculus",
+            "icculus_health_url",
+            "icculus_swap_url",
+        ],
+        out,
+        top,
+    );
     check("record", &["output_dir", "compress"], out, top);
     check("snapshot", &["default_format", "default_pretty"], out, top);
 }

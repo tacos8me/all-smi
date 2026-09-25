@@ -168,6 +168,9 @@ pub struct SnapshotSection {
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]
 pub struct ConsolidatedSection {
     pub enabled: Option<bool>,
+    pub icculus: Option<bool>,
+    pub icculus_health_url: Option<String>,
+    pub icculus_swap_url: Option<String>,
 }
 
 /// Known top-level section names. Anything outside this set in the raw

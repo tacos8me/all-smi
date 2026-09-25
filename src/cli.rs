@@ -64,6 +64,9 @@ pub struct Cli {
     pub command: Option<Commands>,
 }
 
+// Parsed once at startup, so the size gap between `ViewArgs` and the
+// smaller variants costs nothing worth boxing every match arm for.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum Commands {
     /// Run in API mode, exposing metrics in Prometheus format.
@@ -289,6 +292,21 @@ pub struct ViewArgs {
     /// `[consolidated].enabled` in the config file.
     #[arg(long)]
     pub consolidated: bool,
+    /// Add the Icculus pipeline panel to the Consolidated tab (implies
+    /// `--consolidated`): the box engine's `/health`, the Mac llama-swap's
+    /// `/running`, and the gpu.lock holder and link throughput the
+    /// exporters publish. Read-only polling. Falls back to
+    /// `[consolidated].icculus`.
+    #[arg(long)]
+    pub icculus: bool,
+    /// Engine health endpoint for `--icculus`
+    /// (default `http://10.10.10.1:10051/health`).
+    #[arg(long = "icculus-health", value_name = "URL")]
+    pub icculus_health: Option<String>,
+    /// llama-swap base URL for `--icculus`; `/running` is appended
+    /// (default `http://10.10.10.2:8080`).
+    #[arg(long = "icculus-swap", value_name = "URL")]
+    pub icculus_swap: Option<String>,
 }
 
 impl ViewArgs {
@@ -318,6 +336,9 @@ impl ViewArgs {
             ssh_known_hosts: None,
             ssh_concurrency: 32,
             consolidated: false,
+            icculus: false,
+            icculus_health: None,
+            icculus_swap: None,
         }
     }
 }

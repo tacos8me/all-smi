@@ -517,7 +517,15 @@ async fn run_command(cli: Cli, settings: Settings) {
             if args.interval.is_none() {
                 args.interval = settings.view.interval_secs;
             }
-            args.consolidated |= settings.consolidated.enabled;
+            args.icculus |= settings.consolidated.icculus;
+            if args.icculus_health.is_none() {
+                args.icculus_health = settings.consolidated.icculus_health_url.clone();
+            }
+            if args.icculus_swap.is_none() {
+                args.icculus_swap = settings.consolidated.icculus_swap_url.clone();
+            }
+            // The pipeline panel lives in the Consolidated tab.
+            args.consolidated |= settings.consolidated.enabled || args.icculus;
 
             // SSH-transport config-file overrides (issue #194). CLI
             // flags always win; the config file fills in unset values.

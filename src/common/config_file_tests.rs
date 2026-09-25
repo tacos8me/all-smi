@@ -416,6 +416,26 @@ fn api_bind_and_probe_keys_parse_and_reject_garbage() {
 }
 
 #[test]
+fn consolidated_section_parses() {
+    let _guard = crate::common::test_env::lock_env();
+    clear_env();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[consolidated]\nenabled = true\nicculus = true\nicculus_health_url = \"http://h:1/health\"\n",
+    )
+    .unwrap();
+    let outcome = load(Some(&path)).expect("must load");
+    let c = &outcome.settings.consolidated;
+    assert!(c.enabled);
+    assert!(c.icculus);
+    assert_eq!(c.icculus_health_url.as_deref(), Some("http://h:1/health"));
+    assert_eq!(c.icculus_swap_url, None);
+    assert!(outcome.settings.unknown_keys.is_empty());
+}
+
+#[test]
 fn malformed_toml_returns_parse_error() {
     let _guard = crate::common::test_env::lock_env();
     clear_env();

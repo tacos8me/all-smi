@@ -367,10 +367,21 @@ pub async fn run_view_mode(args: &ViewArgs, settings: &Settings) {
     // gauge_style / show_led_grid choices. Defaults are equivalent to
     // the pre-config-file behaviour when no config file is loaded.
     initial_state.display_config = settings.display.clone();
-    if args.consolidated {
+    let pipeline = args.icculus.then(|| {
+        crate::ui::consolidated::pipeline::PipelineConfig::icculus(
+            args.icculus_health.clone(),
+            args.icculus_swap.clone(),
+        )
+    });
+    if args.consolidated || pipeline.is_some() {
         // Open on the Consolidated tab; the collector's tab rebuild keeps
         // the selection by name once the host tabs arrive.
-        initial_state.consolidated = Some(Default::default());
+        initial_state.consolidated = Some(crate::ui::consolidated::ConsolidatedState {
+            pipeline: pipeline
+                .clone()
+                .map(crate::ui::consolidated::pipeline::PipelineStatus::new),
+            ..Default::default()
+        });
         initial_state.tabs = vec![
             "All".to_string(),
             crate::ui::tabs::CONSOLIDATED_TAB_NAME.to_string(),
@@ -404,6 +415,18 @@ pub async fn run_view_mode(args: &ViewArgs, settings: &Settings) {
             .run_remote_mode(args_clone, hosts, hostfile)
             .await;
     });
+
+    // Pipeline panel poller (`--icculus`): read-only GETs against the
+    // engine and llama-swap, never faster than every 2 s.
+    if let Some(config) = pipeline {
+        let interval = Duration::from_secs(args.interval.unwrap_or(2).max(2));
+        tokio::spawn(crate::view::data_collection::run_pipeline_poller(
+            Arc::clone(&app_state),
+            Arc::clone(&data_notify),
+            config,
+            interval,
+        ));
+    }
 
     // Run UI loop with the same notification handle
     let mut ui_loop = match UiLoop::new(app_state, data_notify) {

@@ -41,6 +41,15 @@ fn apply_file_consolidated(raw: &RawConfig, settings: &mut Settings) {
     if let Some(enabled) = c.enabled {
         settings.consolidated.enabled = enabled;
     }
+    if let Some(icculus) = c.icculus {
+        settings.consolidated.icculus = icculus;
+    }
+    if c.icculus_health_url.is_some() {
+        settings.consolidated.icculus_health_url = c.icculus_health_url.clone();
+    }
+    if c.icculus_swap_url.is_some() {
+        settings.consolidated.icculus_swap_url = c.icculus_swap_url.clone();
+    }
 }
 
 fn apply_file_general(raw: &RawConfig, settings: &mut Settings) -> Result<(), ConfigError> {

@@ -23,6 +23,8 @@ use std::collections::{HashMap, VecDeque};
 use crate::device::GpuInfo;
 use crate::probes::HostProbes;
 
+use super::pipeline::{EngineHealth, PipelineStatus, Probe, SwapModel};
+
 /// Samples kept per series. Enough to fill a 120-column braille sparkline
 /// (two samples per cell), i.e. 8 minutes at the default 2 s interval.
 pub const HISTORY_LEN: usize = 240;
@@ -47,6 +49,9 @@ pub fn net_tx_key(host_id: &str, iface: &str) -> String {
 }
 pub const TOTAL_POWER_KEY: &str = "total_power";
 pub const TOTAL_UTIL_KEY: &str = "total_util";
+/// 1 while the pipeline engine reports a GPU job, else 0.
+pub const PIPE_BUSY_KEY: &str = "pipe_busy";
+pub const PIPE_QUEUE_KEY: &str = "pipe_queue";
 
 #[derive(Clone, Debug, Default)]
 pub struct SeriesHistory {
@@ -90,6 +95,8 @@ impl SeriesHistory {
 #[derive(Clone, Debug, Default)]
 pub struct ConsolidatedState {
     pub history: SeriesHistory,
+    /// Pipeline panel (`--icculus`); `None` hides the panel.
+    pub pipeline: Option<PipelineStatus>,
 }
 
 impl ConsolidatedState {
@@ -131,6 +138,37 @@ impl ConsolidatedState {
             }
         }
     }
+
+    /// Store one engine `/health` poll. A failed poll replaces the last
+    /// reading so a dead engine is never shown as healthy.
+    pub fn record_engine(&mut self, result: Result<EngineHealth, String>) {
+        let Some(pipeline) = self.pipeline.as_mut() else {
+            return;
+        };
+        match result {
+            Ok(health) => {
+                self.history.push(
+                    PIPE_BUSY_KEY.to_string(),
+                    if health.is_busy() { 1.0 } else { 0.0 },
+                );
+                if let Some(q) = health.queued_jobs {
+                    self.history.push(PIPE_QUEUE_KEY.to_string(), q as f64);
+                }
+                pipeline.engine = Probe::Ok(health);
+            }
+            Err(e) => pipeline.engine = Probe::Err(e),
+        }
+    }
+
+    /// Store one llama-swap `/running` poll.
+    pub fn record_swap(&mut self, result: Result<Vec<SwapModel>, String>) {
+        if let Some(pipeline) = self.pipeline.as_mut() {
+            pipeline.swap = match result {
+                Ok(models) => Probe::Ok(models),
+                Err(e) => Probe::Err(e),
+            };
+        }
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +176,37 @@ mod tests {
     use super::*;
     use crate::probes::net::NetInterfaceSample;
     use crate::ui::consolidated::model::tests::gpu;
+
+    #[test]
+    fn pipeline_polls_update_status_and_series() {
+        use crate::ui::consolidated::pipeline::PipelineConfig;
+        let mut state = ConsolidatedState {
+            pipeline: Some(PipelineStatus::new(PipelineConfig::icculus(None, None))),
+            ..Default::default()
+        };
+        let busy = EngineHealth {
+            gpu_job: Some(serde_json::Value::String("prefill".to_string())),
+            queued_jobs: Some(2),
+            ..Default::default()
+        };
+        state.record_engine(Ok(busy.clone()));
+        state.record_engine(Err("timeout".to_string()));
+        state.record_swap(Ok(vec![SwapModel {
+            model: "ds41".to_string(),
+            state: "ready".to_string(),
+            name: String::new(),
+        }]));
+        let p = state.pipeline.as_ref().unwrap();
+        assert_eq!(p.engine, Probe::Err("timeout".to_string()));
+        assert!(matches!(&p.swap, Probe::Ok(m) if m[0].model == "ds41"));
+        assert_eq!(state.history.values(PIPE_BUSY_KEY), vec![1.0]);
+        assert_eq!(state.history.values(PIPE_QUEUE_KEY), vec![2.0]);
+
+        // Without a pipeline panel the polls are ignored.
+        let mut plain = ConsolidatedState::default();
+        plain.record_engine(Ok(busy));
+        assert!(plain.history.is_empty());
+    }
 
     #[test]
     fn push_caps_each_series_at_history_len() {
