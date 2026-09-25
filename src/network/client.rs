@@ -388,7 +388,11 @@ impl NetworkClient {
 
                     match task_result {
                         Ok(Some((host, text, error))) => {
-                            let host_identifier = host.clone();
+                            // Key everything by `host:port` so an endpoint
+                            // given as `http://host:port` still joins the
+                            // tab strip, which is built from the same key.
+                            let host_identifier =
+                                crate::common::http_hosts::host_identifier(&host);
                             let mut connection_status =
                                 ConnectionStatus::new(host_identifier.clone(), host.clone());
 
@@ -404,7 +408,7 @@ impl NetworkClient {
                                     connection_statuses.push(connection_status);
                                 } else {
                                     let parser = super::metrics_parser::MetricsParser::new();
-                                    let parsed = parser.parse_metrics(&text, &host, re);
+                                    let parsed = parser.parse_metrics(&text, &host_identifier, re);
 
                                     // Extract the instance name from device info if available
                                     let instance_name = if let Some(first_gpu) = parsed.gpu_info.first() {

@@ -62,6 +62,23 @@ pub fn normalize_http_hosts(hosts: &[String]) -> Result<Vec<String>, HttpHostErr
     Ok(normalized)
 }
 
+/// The `host:port` key a remote endpoint is tracked under: the scheme and
+/// any path are dropped, so `http://node-a:9090` and `node-a:9090` name
+/// the same host. Tabs, connection status, and every scraped device use
+/// this key, which is what keeps them joinable when the operator spells
+/// the endpoint with a scheme.
+pub fn host_identifier(host: &str) -> String {
+    let without_scheme = host
+        .split_once("://")
+        .filter(|(scheme, _)| matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https"))
+        .map_or(host, |(_, rest)| rest);
+    without_scheme
+        .split('/')
+        .next()
+        .unwrap_or(without_scheme)
+        .to_string()
+}
+
 /// Parse one endpoint without performing DNS lookup or any network I/O.
 pub(crate) fn parse_http_host_url(host: &str) -> Result<Url, HttpHostError> {
     if let Some((prefix, _)) = host.split_once(':')
@@ -117,6 +134,17 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn host_identifier_drops_scheme_and_path() {
+        assert_eq!(host_identifier("http://10.10.10.2:9090"), "10.10.10.2:9090");
+        assert_eq!(
+            host_identifier("HTTPS://node-a:9090/metrics"),
+            "node-a:9090"
+        );
+        assert_eq!(host_identifier("node-a:9090"), "node-a:9090");
+        assert_eq!(host_identifier("[::1]:9090"), "[::1]:9090");
     }
 
     #[test]

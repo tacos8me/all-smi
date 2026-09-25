@@ -28,29 +28,9 @@ use super::strategy::{
     CollectionConfig, CollectionData, CollectionError, CollectionResult, DataCollectionStrategy,
 };
 
-/// Extract hostname from URL, handling both simple hostnames and full URLs
-fn extract_hostname_from_url(url: &str) -> String {
-    // Handle full URLs like "http://remote1:9090"
-    if url.starts_with("http://") || url.starts_with("https://") {
-        if let Some(start) = url.find("://") {
-            let after_protocol = &url[start + 3..];
-            if let Some(end) = after_protocol.find('/') {
-                after_protocol[..end].to_string()
-            } else {
-                after_protocol.to_string()
-            }
-        } else {
-            url.to_string()
-        }
-    } else {
-        // Handle simple hostname:port format
-        url.to_string()
-    }
-}
-
 /// Extract the full host:port combination as unique identifier
 fn extract_host_identifier(url: &str) -> String {
-    extract_hostname_from_url(url)
+    crate::common::http_hosts::host_identifier(url)
 }
 
 pub struct RemoteCollector {
