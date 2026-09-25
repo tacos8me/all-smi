@@ -299,10 +299,12 @@ pub struct ViewArgs {
     /// `[consolidated].enabled` in the config file.
     #[arg(long)]
     pub consolidated: bool,
-    /// Add the Icculis pipeline panel to the Consolidated tab (implies
-    /// `--consolidated`): the box engine's `/health`, the Mac llama-swap's
-    /// `/running`, and the gpu.lock holder and link throughput the
-    /// exporters publish. Read-only polling. Falls back to
+    /// Add the Icculis panel to the Consolidated tab and a one-line
+    /// version to the All tab (implies `--consolidated`): a diagram of the
+    /// split with each half's live phase (prefill / decode / idle), the box
+    /// engine's `/health`, the Mac llama-swap's `/running`, and the
+    /// gpu.lock holder, link throughput and phase probes the exporters
+    /// publish. Read-only polling. Falls back to
     /// `[consolidated].icculis`. `--icculus` is accepted too.
     #[arg(long, alias = "icculus")]
     pub icculis: bool,
