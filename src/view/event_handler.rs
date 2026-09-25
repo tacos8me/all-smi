@@ -22,7 +22,7 @@ use crate::record::replay::parse_timecode;
 use crate::ui::aggregation::user::{UserSortKey, sort_users};
 use crate::ui::filter_dsl::{apply as apply_filter, parse as parse_filter};
 use crate::ui::layout::LayoutCalculator;
-use crate::ui::tabs::{topology_tab_index, users_tab_index};
+use crate::ui::tabs::{consolidated_tab_index, topology_tab_index, users_tab_index};
 use crate::ui::viewport::Viewport;
 
 /// Upper bound on the filter input buffer size (bytes).
@@ -50,14 +50,13 @@ fn get_visible_process_rows(state: &AppState) -> usize {
 /// operator's preferred host instead of the first one in the tab strip.
 ///
 /// Does nothing when the active tab is one of the cluster-level reserved
-/// tabs (`All`, `Users`, `Topology`) — those are not host tabs. Called from
+/// tabs (`All`, `Users`, `Topology`, `Consolidated`) — those are not host
+/// tabs. Called from
 /// the `T` hotkey and from the arrow-key navigation handlers so Topology's
 /// target host follows whichever host the operator last selected.
 fn remember_current_host_tab(state: &mut AppState) {
     if let Some(current_name) = state.tabs.get(state.current_tab).cloned()
-        && current_name != "All"
-        && current_name != crate::ui::tabs::USERS_TAB_NAME
-        && current_name != crate::ui::tabs::TOPOLOGY_TAB_NAME
+        && !crate::ui::tabs::is_reserved_tab(&current_name)
     {
         state.topology_last_host_tab = Some(current_name);
     }
@@ -166,6 +165,18 @@ pub async fn handle_key_event(key_event: KeyEvent, state: &mut AppState, args: &
             // no-op when the tab doesn't exist (local mode, replays
             // before the first frame has seeded tabs).
             if let Some(idx) = users_tab_index(&state.tabs) {
+                state.current_tab = idx;
+                state.gpu_scroll_offset = 0;
+                state.storage_scroll_offset = 0;
+                state.mark_data_changed();
+            }
+            false
+        }
+        KeyCode::Char('C') => {
+            // Jump to the Consolidated tab. Silent no-op unless the
+            // viewer was started with `--consolidated`.
+            if let Some(idx) = consolidated_tab_index(&state.tabs) {
+                remember_current_host_tab(state);
                 state.current_tab = idx;
                 state.gpu_scroll_offset = 0;
                 state.storage_scroll_offset = 0;
@@ -1704,6 +1715,27 @@ mod tests {
         state.current_tab = 2;
         handle_key_event(key(KeyCode::Char('V')), &mut state, &args()).await;
         assert_eq!(state.current_tab, 1, "`V` must jump to the Users tab");
+    }
+
+    #[tokio::test]
+    async fn capital_c_jumps_to_consolidated_tab_only_when_present() {
+        let mut state = AppState::new();
+        state.is_local_mode = false;
+        state.loading = false;
+        state.tabs = vec![
+            "All".to_string(),
+            crate::ui::tabs::CONSOLIDATED_TAB_NAME.to_string(),
+            "host-0".to_string(),
+        ];
+        state.current_tab = 2;
+        handle_key_event(key(KeyCode::Char('C')), &mut state, &args()).await;
+        assert_eq!(state.current_tab, 1);
+        assert_eq!(state.topology_last_host_tab.as_deref(), Some("host-0"));
+
+        state.tabs = vec!["All".to_string(), "host-0".to_string()];
+        state.current_tab = 1;
+        handle_key_event(key(KeyCode::Char('C')), &mut state, &args()).await;
+        assert_eq!(state.current_tab, 1, "no Consolidated tab, no jump");
     }
 
     #[tokio::test]

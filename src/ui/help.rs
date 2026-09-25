@@ -193,6 +193,11 @@ fn render_shortcuts_section(
         ),
         ("  V", "Jump to cluster-wide Users tab (remote)", "shortcut"),
         ("  T", "Jump to Topology tab (remote/replay)", "shortcut"),
+        (
+            "  C",
+            "Jump to Consolidated tab (view --consolidated)",
+            "shortcut",
+        ),
         ("  Q", "Exit application", "shortcut"),
         ("  ESC", "Close help / clear filter / exit", "shortcut"),
         ("", "", ""),

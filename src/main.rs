@@ -517,6 +517,7 @@ async fn run_command(cli: Cli, settings: Settings) {
             if args.interval.is_none() {
                 args.interval = settings.view.interval_secs;
             }
+            args.consolidated |= settings.consolidated.enabled;
 
             // SSH-transport config-file overrides (issue #194). CLI
             // flags always win; the config file fills in unset values.

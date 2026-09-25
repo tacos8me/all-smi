@@ -18,6 +18,7 @@ pub mod alerts;
 pub mod braille;
 pub mod buffer;
 pub mod chrome;
+pub mod consolidated;
 pub mod constants;
 pub mod dashboard;
 pub mod filter_dsl;

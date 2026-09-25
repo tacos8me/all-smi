@@ -266,6 +266,27 @@ impl FrameRenderer {
             return (buffer.get_buffer().to_string(), 0);
         }
 
+        // Consolidated tab (`--consolidated`): every host's accelerators
+        // as one system. Same short-circuit as Users / Topology.
+        if let Some(consolidated) = snapshot.consolidated.as_ref()
+            && is_consolidated_tab_selected(snapshot)
+        {
+            let heading_rows = buffer.line_count() as u16;
+            let avail = rows.saturating_sub(heading_rows).saturating_sub(1).max(1);
+            let inputs = crate::ui::consolidated::ConsolidatedInputs {
+                gpu_info: &snapshot.gpu_info,
+                cpu_info: &snapshot.cpu_info,
+                tabs: &snapshot.tabs,
+                connection_status: &snapshot.connection_status,
+                host_probes: &snapshot.host_probes,
+                state: consolidated,
+                now_unix: chrono::Utc::now().timestamp().max(0) as u64,
+            };
+            crate::ui::consolidated::render_consolidated_tab(&mut buffer, &inputs, cols, avail);
+            print_function_keys(&mut buffer, cols, rows, &view_state, is_remote);
+            return (buffer.get_buffer().to_string(), 0);
+        }
+
         // Render chassis information (node-level metrics)
         Self::render_chassis_section(&mut buffer, snapshot, width, cache);
 
@@ -863,6 +884,14 @@ fn is_users_tab_selected(snapshot: &RenderSnapshot) -> bool {
         .unwrap_or(false)
 }
 
+/// True when the snapshot's current tab is the Consolidated tab.
+fn is_consolidated_tab_selected(snapshot: &RenderSnapshot) -> bool {
+    snapshot
+        .tabs
+        .get(snapshot.current_tab)
+        .is_some_and(|t| t == crate::ui::tabs::CONSOLIDATED_TAB_NAME)
+}
+
 /// True when the snapshot's current tab is the per-host Topology tab
 /// (issue #190).
 fn is_topology_tab_selected(snapshot: &RenderSnapshot) -> bool {
@@ -901,10 +930,7 @@ fn topology_target_host(snapshot: &RenderSnapshot) -> String {
     }
     // Fall through: first host-shaped tab after the reserved entries.
     for tab in &snapshot.tabs {
-        if tab != "All"
-            && tab != crate::ui::tabs::USERS_TAB_NAME
-            && tab != crate::ui::tabs::TOPOLOGY_TAB_NAME
-        {
+        if !crate::ui::tabs::is_reserved_tab(tab) {
             return tab.clone();
         }
     }
@@ -1152,6 +1178,33 @@ mod tests {
         ];
         state.topology_last_host_tab = last_host.map(|s| s.to_string());
         RenderSnapshot::capture(&mut state)
+    }
+
+    #[test]
+    fn consolidated_tab_owns_the_body_when_selected() {
+        let mut state = AppState::new();
+        state.is_local_mode = false;
+        state.loading = false;
+        state.consolidated = Some(Default::default());
+        state.tabs = vec![
+            "All".to_string(),
+            crate::ui::tabs::CONSOLIDATED_TAB_NAME.to_string(),
+            "host1".to_string(),
+        ];
+        state.current_tab = 1;
+        let args = ViewArgs {
+            hosts: Some(vec!["host1".to_string()]),
+            consolidated: true,
+            ..ViewArgs::empty()
+        };
+        let snapshot = RenderSnapshot::capture(&mut state);
+        let (out, process_rows) = FrameRenderer::render_main(&snapshot, &args, 120, 40, None);
+        assert!(out.contains("0 accelerators on 1 host (0 up)"), "{out}");
+        assert!(out.contains("unreachable: no response yet"), "{out}");
+        assert_eq!(process_rows, 0);
+
+        // A reserved tab is never remembered as the Topology target.
+        assert_eq!(topology_target_host(&snapshot), "host1");
     }
 
     #[test]

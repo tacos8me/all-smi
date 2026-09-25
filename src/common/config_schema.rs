@@ -47,6 +47,8 @@ pub struct RawConfig {
     pub record: Option<RecordSection>,
     #[serde(default)]
     pub snapshot: Option<SnapshotSection>,
+    #[serde(default)]
+    pub consolidated: Option<ConsolidatedSection>,
 }
 
 /// `[general]` section — cross-mode defaults.
@@ -162,6 +164,12 @@ pub struct SnapshotSection {
     pub default_pretty: Option<bool>,
 }
 
+/// `[consolidated]` section — the `view --consolidated` tab.
+#[derive(Default, Debug, Clone, Deserialize, Serialize)]
+pub struct ConsolidatedSection {
+    pub enabled: Option<bool>,
+}
+
 /// Known top-level section names. Anything outside this set in the raw
 /// TOML table is reported as "unknown".
 pub const KNOWN_TOP_LEVEL: &[&str] = &[
@@ -175,4 +183,5 @@ pub const KNOWN_TOP_LEVEL: &[&str] = &[
     "display",
     "record",
     "snapshot",
+    "consolidated",
 ];

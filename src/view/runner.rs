@@ -367,6 +367,16 @@ pub async fn run_view_mode(args: &ViewArgs, settings: &Settings) {
     // gauge_style / show_led_grid choices. Defaults are equivalent to
     // the pre-config-file behaviour when no config file is loaded.
     initial_state.display_config = settings.display.clone();
+    if args.consolidated {
+        // Open on the Consolidated tab; the collector's tab rebuild keeps
+        // the selection by name once the host tabs arrive.
+        initial_state.consolidated = Some(Default::default());
+        initial_state.tabs = vec![
+            "All".to_string(),
+            crate::ui::tabs::CONSOLIDATED_TAB_NAME.to_string(),
+        ];
+        initial_state.current_tab = 1;
+    }
     let app_state = Arc::new(Mutex::new(initial_state));
 
     // Create shared notification handle for collector -> UI wakeups

@@ -32,7 +32,15 @@ pub(super) fn apply_file(raw: &RawConfig, settings: &mut Settings) -> Result<(),
     apply_file_display(raw, settings);
     apply_file_record(raw, settings)?;
     apply_file_snapshot(raw, settings)?;
+    apply_file_consolidated(raw, settings);
     Ok(())
+}
+
+fn apply_file_consolidated(raw: &RawConfig, settings: &mut Settings) {
+    let Some(c) = &raw.consolidated else { return };
+    if let Some(enabled) = c.enabled {
+        settings.consolidated.enabled = enabled;
+    }
 }
 
 fn apply_file_general(raw: &RawConfig, settings: &mut Settings) -> Result<(), ConfigError> {

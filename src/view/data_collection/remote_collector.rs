@@ -133,18 +133,23 @@ impl RemoteCollector {
 
     fn update_remote_tabs(state: &mut AppState) {
         // Tab layout (issues #189, #190):
-        //   [All, Users, Topology, <host1>, <host2>, ...]
+        //   [All, (Consolidated,) Users, Topology, <host1>, <host2>, ...]
         //
         // Cluster-level tabs cluster together at the left edge of the
         // row. Inserting them there adjusts the indices but the
         // subsequent `current_tab` snap-back guards against the previous
         // index being out of range after tabs shrink (e.g. all hosts
         // disconnected).
-        let mut tabs = vec![
-            "All".to_string(),
+        let mut tabs = vec!["All".to_string()];
+        // The Consolidated tab (`--consolidated`) leads the cluster-level
+        // tabs because the operator asked to see it first.
+        if state.consolidated.is_some() {
+            tabs.push(crate::ui::tabs::CONSOLIDATED_TAB_NAME.to_string());
+        }
+        tabs.extend([
             crate::ui::tabs::USERS_TAB_NAME.to_string(),
             crate::ui::tabs::TOPOLOGY_TAB_NAME.to_string(),
-        ];
+        ]);
         tabs.extend(state.known_hosts.clone());
 
         // Preserve the operator's current selection where possible:
@@ -244,6 +249,10 @@ impl DataCollectionStrategy for RemoteCollector {
 
         // Update utilization history
         self.aggregator.update_utilization_history(&mut state);
+        if let Some(mut consolidated) = state.consolidated.take() {
+            consolidated.record_collection(&state.gpu_info, &state.host_probes);
+            state.consolidated = Some(consolidated);
+        }
 
         // Feed power samples into the energy integrator (issue #191).
         // In remote mode this exercises the same code path as local
@@ -375,5 +384,56 @@ impl RemoteCollectorBuilder {
 impl Default for RemoteCollectorBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::tabs::{CONSOLIDATED_TAB_NAME, TOPOLOGY_TAB_NAME, USERS_TAB_NAME};
+
+    fn state_with_hosts() -> AppState {
+        let mut state = AppState::new();
+        state.is_local_mode = false;
+        state.known_hosts = vec!["mac:9090".to_string(), "box:9090".to_string()];
+        state
+    }
+
+    #[test]
+    fn stock_tab_strip_has_no_consolidated_tab() {
+        let mut state = state_with_hosts();
+        RemoteCollector::update_remote_tabs(&mut state);
+        assert_eq!(
+            state.tabs,
+            [
+                "All",
+                USERS_TAB_NAME,
+                TOPOLOGY_TAB_NAME,
+                "mac:9090",
+                "box:9090"
+            ]
+        );
+    }
+
+    #[test]
+    fn consolidated_tab_leads_and_keeps_its_selection() {
+        let mut state = state_with_hosts();
+        state.consolidated = Some(Default::default());
+        // As seeded by `run_view_mode` before the first collection.
+        state.tabs = vec!["All".to_string(), CONSOLIDATED_TAB_NAME.to_string()];
+        state.current_tab = 1;
+        RemoteCollector::update_remote_tabs(&mut state);
+        assert_eq!(
+            state.tabs,
+            [
+                "All",
+                CONSOLIDATED_TAB_NAME,
+                USERS_TAB_NAME,
+                TOPOLOGY_TAB_NAME,
+                "mac:9090",
+                "box:9090"
+            ]
+        );
+        assert_eq!(state.current_tab, 1);
     }
 }

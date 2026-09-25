@@ -152,6 +152,7 @@ pub struct Settings {
     pub display: DisplaySettings,
     pub record: RecordSettings,
     pub snapshot: SnapshotSettings,
+    pub consolidated: ConsolidatedSettings,
     /// Path the settings were actually loaded from. `None` means we
     /// used compiled defaults + env overrides only.
     pub source_path: Option<PathBuf>,
@@ -234,6 +235,12 @@ pub struct RecordSettings {
     pub compress: String,
 }
 
+/// `[consolidated]` — the `view --consolidated` tab.
+#[derive(Debug, Clone, Default)]
+pub struct ConsolidatedSettings {
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct SnapshotSettings {
     pub default_format: String,
@@ -274,6 +281,7 @@ impl Default for Settings {
                 default_format: "json".to_string(),
                 default_pretty: true,
             },
+            consolidated: ConsolidatedSettings::default(),
             source_path: None,
             unknown_keys: Vec::new(),
         }
@@ -558,6 +566,7 @@ fn scan_unknown_subkeys(top: &toml::map::Map<String, TomlValue>, out: &mut BTree
         out,
         top,
     );
+    check("consolidated", &["enabled"], out, top);
     check("record", &["output_dir", "compress"], out, top);
     check("snapshot", &["default_format", "default_pretty"], out, top);
 }

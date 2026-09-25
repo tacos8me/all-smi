@@ -31,9 +31,11 @@ use crate::device::{
 };
 use crate::metrics::energy::EnergyAccountant;
 use crate::network::metrics_parser::ParsedProcessRow;
+use crate::probes::HostProbes;
 use crate::storage::info::StorageInfo;
 use crate::ui::aggregation::user::UserAggregationResult;
 use crate::ui::alerts::{AlertTransition, Alerter};
+use crate::ui::consolidated::ConsolidatedState;
 use crate::ui::filter_dsl::Expr as FilterExpr;
 use crate::ui::notification::NotificationManager;
 use crate::ui::topology::TopologyViewMode;
@@ -179,6 +181,12 @@ pub struct RenderSnapshot {
     pub energy: EnergyAccountant,
     /// Energy configuration (price, currency, display toggles).
     pub energy_config: EnergyConfig,
+
+    // Consolidated tab
+    /// Opt-in host probes (link counters, lock holders) per host.
+    pub host_probes: Vec<HostProbes>,
+    /// Sparkline history; `None` unless `--consolidated` was given.
+    pub consolidated: Option<ConsolidatedState>,
 }
 
 impl RenderSnapshot {
@@ -291,6 +299,10 @@ impl RenderSnapshot {
             // Energy accounting (issue #191)
             energy: state.energy.clone(),
             energy_config: state.energy_config.clone(),
+
+            // Consolidated tab
+            host_probes: state.host_probes.clone(),
+            consolidated: state.consolidated.clone(),
         }
     }
 
@@ -403,6 +415,10 @@ impl RenderSnapshot {
         // Energy accounting (issue #191)
         state.energy = self.energy.clone();
         state.energy_config = self.energy_config.clone();
+
+        // Consolidated tab
+        state.host_probes = self.host_probes.clone();
+        state.consolidated = self.consolidated.clone();
 
         state
     }

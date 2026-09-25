@@ -24,6 +24,7 @@ use crate::probes::HostProbes;
 use crate::storage::info::StorageInfo;
 use crate::ui::aggregation::user::{UserAggregationResult, UserSortKey};
 use crate::ui::alerts::{AlertTransition, Alerter};
+use crate::ui::consolidated::ConsolidatedState;
 use crate::ui::filter_dsl::Expr as FilterExpr;
 use crate::ui::notification::NotificationManager;
 use crate::ui::topology::TopologyViewMode;
@@ -429,6 +430,9 @@ pub struct AppState {
     /// mode holds the local host's single entry; remote view mode holds
     /// one entry per scraped host that exports probe series.
     pub host_probes: Vec<HostProbes>,
+    /// Consolidated-tab state (sparkline history). `Some` only when the
+    /// viewer was started with `--consolidated`.
+    pub consolidated: Option<ConsolidatedState>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -568,6 +572,7 @@ impl AppState {
                 show_led_grid: true,
             },
             host_probes: Vec::new(),
+            consolidated: None,
         }
     }
 

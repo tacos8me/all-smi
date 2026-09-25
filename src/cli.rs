@@ -279,6 +279,16 @@ pub struct ViewArgs {
     /// beyond this cap stagger their initial connection attempts.
     #[arg(long = "ssh-concurrency", default_value_t = 32)]
     pub ssh_concurrency: usize,
+
+    // --- Consolidated view ---------------------------------------------
+    /// Add a Consolidated tab, selected at startup, that shows every
+    /// accelerator across `--hosts` as one system: one row per device
+    /// with its memory labeled unified or VRAM, combined memory and
+    /// power, sparklines, and any host probes the exporters publish
+    /// (`api --net-iface`, `--watch-lock`). Falls back to
+    /// `[consolidated].enabled` in the config file.
+    #[arg(long)]
+    pub consolidated: bool,
 }
 
 impl ViewArgs {
@@ -307,6 +317,7 @@ impl ViewArgs {
             ssh_fallback: None,
             ssh_known_hosts: None,
             ssh_concurrency: 32,
+            consolidated: false,
         }
     }
 }

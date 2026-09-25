@@ -38,6 +38,14 @@ pub const USERS_TAB_NAME: &str = "Users";
 /// binding jumps to this tab.
 pub const TOPOLOGY_TAB_NAME: &str = "Topology";
 
+/// Reserved tab name for the Consolidated tab (`view --consolidated`).
+///
+/// Present only when the operator asked for it. It renders every
+/// accelerator across the scraped hosts as one system (per-device rows,
+/// combined memory and power, host probes, optional pipeline panel) and,
+/// like Users and Topology, skips the per-host GPU / device pipeline.
+pub const CONSOLIDATED_TAB_NAME: &str = "Consolidated";
+
 /// Return the index of the Users tab inside `tabs`, or `None` when the
 /// tab has not been inserted yet (local mode, replay streams that do
 /// not carry process rows).
@@ -50,6 +58,13 @@ pub fn users_tab_index(tabs: &[String]) -> Option<usize> {
 #[inline]
 pub fn is_users_tab_active(state: &AppState) -> bool {
     users_tab_index(&state.tabs).is_some_and(|i| i == state.current_tab)
+}
+
+/// Return the index of the Consolidated tab inside `tabs`, or `None`
+/// when the viewer was not started with `--consolidated`.
+#[inline]
+pub fn consolidated_tab_index(tabs: &[String]) -> Option<usize> {
+    tabs.iter().position(|t| t == CONSOLIDATED_TAB_NAME)
 }
 
 /// Return the index of the Topology tab inside `tabs`, or `None` when
@@ -66,13 +81,16 @@ pub fn is_topology_tab_active(state: &AppState) -> bool {
 }
 
 /// True when `name` is a reserved cluster-level tab ("All", Users,
-/// Topology) rather than a per-host tab. Used by callers that want to
+/// Topology, Consolidated) rather than a per-host tab. Used by callers that want to
 /// count or iterate only the host tabs without hard-coding the reserved
 /// names at the call site (see issue raised when 50 hosts displayed as
 /// `50/52` because the dashboard counted reserved tabs as nodes).
 #[inline]
 pub fn is_reserved_tab(name: &str) -> bool {
-    matches!(name, "All" | USERS_TAB_NAME | TOPOLOGY_TAB_NAME)
+    matches!(
+        name,
+        "All" | USERS_TAB_NAME | TOPOLOGY_TAB_NAME | CONSOLIDATED_TAB_NAME
+    )
 }
 
 /// Count host tabs in `tabs`, excluding the reserved cluster-level tabs
@@ -352,6 +370,7 @@ mod tests {
         assert!(is_reserved_tab("All"));
         assert!(is_reserved_tab(USERS_TAB_NAME));
         assert!(is_reserved_tab(TOPOLOGY_TAB_NAME));
+        assert!(is_reserved_tab(CONSOLIDATED_TAB_NAME));
         assert!(!is_reserved_tab("dgx-01"));
         assert!(!is_reserved_tab("admin@dgx-01:22"));
     }
