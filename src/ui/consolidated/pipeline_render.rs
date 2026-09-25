@@ -252,8 +252,9 @@ fn endpoint_label(model: &ConsolidatedModel, url: &str) -> String {
             .is_some_and(|(ip, _)| ip == host)
     });
     match known {
-        Some(h) => format!("{} {port}", h.label),
-        None => format!("{host}{port}"),
+        // A host that never answered has no name yet, only its address.
+        Some(h) if h.label != h.host_id => format!("{} {port}", h.label),
+        _ => format!("{host}{port}"),
     }
 }
 

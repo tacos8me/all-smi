@@ -321,20 +321,31 @@ fn render_totals<W: Write>(
     }
     w.emit(line);
 
-    let mut split = Line::default();
-    split.cell("", c.host, LABEL).text(
-        &format!(
-            "unified {:.1}/{:.1} GiB · VRAM {:.1}/{:.1} GiB · SoC {} + discrete {}",
+    // Break the pool down by memory kind, naming only kinds present.
+    let mut parts = Vec::new();
+    if t.unified_total > 0 {
+        parts.push(format!(
+            "unified {:.1}/{:.1} GiB, SoC GPU {}",
             t.unified_used as f64 / GIB,
             t.unified_total as f64 / GIB,
+            fmt_watts(t.unified_power_watts)
+        ));
+    }
+    if t.dedicated_total > 0 {
+        parts.push(format!(
+            "VRAM {:.1}/{:.1} GiB, discrete GPUs {}",
             t.dedicated_used as f64 / GIB,
             t.dedicated_total as f64 / GIB,
-            fmt_watts(t.unified_power_watts),
-            fmt_watts(t.dedicated_power_watts),
-        ),
-        LABEL,
-    );
-    w.emit(split);
+            fmt_watts(t.dedicated_power_watts)
+        ));
+    }
+    if !parts.is_empty() {
+        let mut split = Line::default();
+        split
+            .cell("", c.host, LABEL)
+            .text(&parts.join(" · "), LABEL);
+        w.emit(split);
+    }
 }
 
 /// Link throughput and lock holders from the opt-in exporter probes.
@@ -761,7 +772,9 @@ mod tests {
         assert!(out.contains("└ ANE 1.5 W"));
         assert!(out.contains("328.0/448.0 GiB 73%"), "{out}");
         assert!(out.contains("212 W"));
-        assert!(out.contains("SoC 12.0 W + discrete 200 W"));
+        assert!(out.contains(
+            "unified 154.0/256.0 GiB, SoC GPU 12.0 W · VRAM 174.0/192.0 GiB, discrete GPUs 200 W"
+        ));
     }
 
     #[test]
