@@ -239,10 +239,10 @@ pub struct RecordSettings {
 #[derive(Debug, Clone, Default)]
 pub struct ConsolidatedSettings {
     pub enabled: bool,
-    /// Show the Icculus pipeline panel (`--icculus`).
-    pub icculus: bool,
-    pub icculus_health_url: Option<String>,
-    pub icculus_swap_url: Option<String>,
+    /// Show the Icculis pipeline panel (`--icculis`).
+    pub icculis: bool,
+    pub icculis_health_url: Option<String>,
+    pub icculis_swap_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -574,6 +574,10 @@ fn scan_unknown_subkeys(top: &toml::map::Map<String, TomlValue>, out: &mut BTree
         "consolidated",
         &[
             "enabled",
+            "icculis",
+            "icculis_health_url",
+            "icculis_swap_url",
+            // Earlier spelling, still accepted.
             "icculus",
             "icculus_health_url",
             "icculus_swap_url",

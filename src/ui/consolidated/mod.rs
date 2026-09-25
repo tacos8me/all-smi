@@ -26,7 +26,7 @@
 //!   recorded by the remote collector each cycle.
 //! * [`model`] — a pure view model built from the render snapshot.
 //! * [`pipeline`] — the optional pipeline panel's endpoint data
-//!   (`--icculus`: engine `/health`, llama-swap `/running`).
+//!   (`--icculis`: engine `/health`, llama-swap `/running`).
 //! * [`render`] — writes the model into the frame buffer.
 
 pub mod history;

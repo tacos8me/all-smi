@@ -423,15 +423,27 @@ fn consolidated_section_parses() {
     let path = dir.path().join("config.toml");
     std::fs::write(
         &path,
-        "[consolidated]\nenabled = true\nicculus = true\nicculus_health_url = \"http://h:1/health\"\n",
+        "[consolidated]\nenabled = true\nicculis = true\nicculis_health_url = \"http://h:1/health\"\n",
     )
     .unwrap();
     let outcome = load(Some(&path)).expect("must load");
     let c = &outcome.settings.consolidated;
     assert!(c.enabled);
-    assert!(c.icculus);
-    assert_eq!(c.icculus_health_url.as_deref(), Some("http://h:1/health"));
-    assert_eq!(c.icculus_swap_url, None);
+    assert!(c.icculis);
+    assert_eq!(c.icculis_health_url.as_deref(), Some("http://h:1/health"));
+    assert_eq!(c.icculis_swap_url, None);
+    assert!(outcome.settings.unknown_keys.is_empty());
+
+    // The earlier spelling still loads.
+    std::fs::write(
+        &path,
+        "[consolidated]\nicculus = true\nicculus_swap_url = \"http://m:8080\"\n",
+    )
+    .unwrap();
+    let outcome = load(Some(&path)).expect("must load");
+    let c = &outcome.settings.consolidated;
+    assert!(c.icculis);
+    assert_eq!(c.icculis_swap_url.as_deref(), Some("http://m:8080"));
     assert!(outcome.settings.unknown_keys.is_empty());
 }
 

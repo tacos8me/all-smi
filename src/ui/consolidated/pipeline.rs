@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Pipeline panel data (`view --icculus`): a model served across the
+//! Pipeline panel data (`view --icculis`): a model served across the
 //! machines, seen through two read-only HTTP endpoints.
 //!
 //! * the box engine's `/health` JSON (sessions, connections, the GPU job
@@ -27,7 +27,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Default endpoints for the Icculus deployment: the box engine on the
+/// Default endpoints for the Icculis deployment: the box engine on the
 /// direct link and the Mac's llama-swap.
 pub const DEFAULT_HEALTH_URL: &str = "http://10.10.10.1:10051/health";
 pub const DEFAULT_SWAP_URL: &str = "http://10.10.10.2:8080";
@@ -42,9 +42,9 @@ pub struct PipelineConfig {
 }
 
 impl PipelineConfig {
-    pub fn icculus(health_url: Option<String>, swap_url: Option<String>) -> Self {
+    pub fn icculis(health_url: Option<String>, swap_url: Option<String>) -> Self {
         Self {
-            title: "Icculus pipeline".to_string(),
+            title: "Icculis pipeline".to_string(),
             health_url: health_url.unwrap_or_else(|| DEFAULT_HEALTH_URL.to_string()),
             swap_url: swap_url.unwrap_or_else(|| DEFAULT_SWAP_URL.to_string()),
         }
@@ -235,18 +235,18 @@ mod tests {
     #[test]
     fn parses_llama_swap_running() {
         let body = br#"{"running":[{"model":"ds41","state":"ready","cmd":"x","proxy":"y","ttl":0,
-            "name":"Icculus","description":"d"}]}"#;
+            "name":"Icculis","description":"d"}]}"#;
         let models = parse_swap_running(body).unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].model, "ds41");
         assert_eq!(models[0].state, "ready");
-        assert_eq!(models[0].name, "Icculus");
+        assert_eq!(models[0].name, "Icculis");
         assert!(parse_swap_running(br#"{"running":[]}"#).unwrap().is_empty());
     }
 
     #[test]
     fn swap_url_gets_running_path() {
-        let c = PipelineConfig::icculus(None, Some("http://mac:8080/".to_string()));
+        let c = PipelineConfig::icculis(None, Some("http://mac:8080/".to_string()));
         assert_eq!(c.swap_running_url(), "http://mac:8080/running");
         assert_eq!(c.health_url, DEFAULT_HEALTH_URL);
     }

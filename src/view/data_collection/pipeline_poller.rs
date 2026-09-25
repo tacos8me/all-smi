@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Background poller for the Consolidated tab's pipeline panel
-//! (`view --icculus`).
+//! (`view --icculis`).
 //!
 //! Issues plain read-only `GET`s: the engine's `/health` every cycle and
 //! llama-swap's `/running` at most every [`SWAP_POLL_EVERY`], because
@@ -121,7 +121,7 @@ mod tests {
     #[tokio::test]
     async fn unreachable_endpoints_are_reported_not_hidden() {
         // Port 9 (discard) on loopback is closed in any sane test sandbox.
-        let config = PipelineConfig::icculus(
+        let config = PipelineConfig::icculis(
             Some("http://127.0.0.1:9/health".to_string()),
             Some("http://127.0.0.1:9".to_string()),
         );

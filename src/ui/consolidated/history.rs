@@ -95,7 +95,7 @@ impl SeriesHistory {
 #[derive(Clone, Debug, Default)]
 pub struct ConsolidatedState {
     pub history: SeriesHistory,
-    /// Pipeline panel (`--icculus`); `None` hides the panel.
+    /// Pipeline panel (`--icculis`); `None` hides the panel.
     pub pipeline: Option<PipelineStatus>,
 }
 
@@ -181,7 +181,7 @@ mod tests {
     fn pipeline_polls_update_status_and_series() {
         use crate::ui::consolidated::pipeline::PipelineConfig;
         let mut state = ConsolidatedState {
-            pipeline: Some(PipelineStatus::new(PipelineConfig::icculus(None, None))),
+            pipeline: Some(PipelineStatus::new(PipelineConfig::icculis(None, None))),
             ..Default::default()
         };
         let busy = EngineHealth {

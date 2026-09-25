@@ -367,10 +367,10 @@ pub async fn run_view_mode(args: &ViewArgs, settings: &Settings) {
     // gauge_style / show_led_grid choices. Defaults are equivalent to
     // the pre-config-file behaviour when no config file is loaded.
     initial_state.display_config = settings.display.clone();
-    let pipeline = args.icculus.then(|| {
-        crate::ui::consolidated::pipeline::PipelineConfig::icculus(
-            args.icculus_health.clone(),
-            args.icculus_swap.clone(),
+    let pipeline = args.icculis.then(|| {
+        crate::ui::consolidated::pipeline::PipelineConfig::icculis(
+            args.icculis_health.clone(),
+            args.icculis_swap.clone(),
         )
     });
     if args.consolidated || pipeline.is_some() {
@@ -416,7 +416,7 @@ pub async fn run_view_mode(args: &ViewArgs, settings: &Settings) {
             .await;
     });
 
-    // Pipeline panel poller (`--icculus`): read-only GETs against the
+    // Pipeline panel poller (`--icculis`): read-only GETs against the
     // engine and llama-swap, never faster than every 2 s.
     if let Some(config) = pipeline {
         let interval = Duration::from_secs(args.interval.unwrap_or(2).max(2));

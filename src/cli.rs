@@ -292,21 +292,21 @@ pub struct ViewArgs {
     /// `[consolidated].enabled` in the config file.
     #[arg(long)]
     pub consolidated: bool,
-    /// Add the Icculus pipeline panel to the Consolidated tab (implies
+    /// Add the Icculis pipeline panel to the Consolidated tab (implies
     /// `--consolidated`): the box engine's `/health`, the Mac llama-swap's
     /// `/running`, and the gpu.lock holder and link throughput the
     /// exporters publish. Read-only polling. Falls back to
-    /// `[consolidated].icculus`.
-    #[arg(long)]
-    pub icculus: bool,
-    /// Engine health endpoint for `--icculus`
+    /// `[consolidated].icculis`. `--icculus` is accepted too.
+    #[arg(long, alias = "icculus")]
+    pub icculis: bool,
+    /// Engine health endpoint for `--icculis`
     /// (default `http://10.10.10.1:10051/health`).
-    #[arg(long = "icculus-health", value_name = "URL")]
-    pub icculus_health: Option<String>,
-    /// llama-swap base URL for `--icculus`; `/running` is appended
+    #[arg(long = "icculis-health", alias = "icculus-health", value_name = "URL")]
+    pub icculis_health: Option<String>,
+    /// llama-swap base URL for `--icculis`; `/running` is appended
     /// (default `http://10.10.10.2:8080`).
-    #[arg(long = "icculus-swap", value_name = "URL")]
-    pub icculus_swap: Option<String>,
+    #[arg(long = "icculis-swap", alias = "icculus-swap", value_name = "URL")]
+    pub icculis_swap: Option<String>,
 }
 
 impl ViewArgs {
@@ -336,9 +336,9 @@ impl ViewArgs {
             ssh_known_hosts: None,
             ssh_concurrency: 32,
             consolidated: false,
-            icculus: false,
-            icculus_health: None,
-            icculus_swap: None,
+            icculis: false,
+            icculis_health: None,
+            icculis_swap: None,
         }
     }
 }
